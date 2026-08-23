@@ -1,66 +1,107 @@
 # Clockodo Menubar
 
-A native macOS menubar client for the Clockodo stop clock.
+[![CI](https://github.com/navopw/clockodo-menubar/actions/workflows/ci.yml/badge.svg)](https://github.com/navopw/clockodo-menubar/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Current Scope
+> A small, native macOS menu bar client for the Clockodo stop clock.
+
+Start and stop timers, choose a customer, project, and service, and see your
+running time without opening the Clockodo web app.
+
+## Features
 
 - Store the Clockodo email and API key in the macOS Keychain.
-- Load active customers, projects, and services from the current Clockodo API routes.
-- Start a Clockodo timer with a customer, optional project, service, and note.
-- Stop the currently running timer.
-- Show live elapsed time in the menubar.
-- Test credentials before storing them and show actionable connection states.
-- Offer retry and refresh actions for offline, permission, and rate-limit errors.
-- Optionally start automatically at login.
-- Show today's tracked total from `/v2/entries`.
-- Start the last valid customer, project, and service setup with one click.
+- Load active customers, projects, and services from the current Clockodo API.
+- Start and stop the current timer with an optional note.
+- Show live elapsed time in the menu bar.
+- Show today's tracked total.
+- Start the last valid timer setup with one click.
 - Refresh the running timer approximately once per minute and today's total every five minutes.
+- Offer retry and clear connection states for offline, permission, and rate-limit errors.
+- Optionally start automatically at login.
 
-## API Research
+## Requirements
 
-Clockodo's base URL is `https://my.clockodo.com/api`. Every request uses the per-user `X-ClockodoApiUser` and `X-ClockodoApiKey` headers plus `X-Clockodo-External-Application`.
+- macOS 13 or newer
+- Xcode 16 or newer, including a Swift 6 toolchain
+- A Clockodo account with an API key
 
-The stop clock uses `/v2/clock`:
+## Installation
 
-- `GET /v2/clock` reads the current running entry.
-- `POST /v2/clock` starts a timer. `customers_id` and `services_id` are required.
-- `DELETE /v2/clock/{entry_id}` stops a timer.
+When a release is published, download its ZIP from [GitHub Releases](https://github.com/navopw/clockodo-menubar/releases),
+unzip it, and open `Clockodo Menubar.app`. Until then, use [Build From Source](#build-from-source).
 
-Catalog requests use the current routes after Clockodo's May 1, 2026 legacy endpoint removal:
+Release archives are currently ad-hoc signed. macOS may require you to approve
+one in **System Settings > Privacy & Security**. Developer ID signing and
+notarization are not configured yet.
 
-- `/v3/customers`
-- `/v4/projects`
-- `/v4/services`
+## Setup
 
-Clockodo applies per-endpoint rate limits but does not publish a numeric limit. The app avoids per-second API polling and handles HTTP 429 responses as regular API errors.
+1. Create or copy a Clockodo API key for your account.
+2. Open Clockodo Menubar and enter your Clockodo email address and API key.
+3. The app validates the credentials before storing them in the macOS Keychain.
+4. Choose a customer and service, optionally choose a project, and start the timer.
 
-Sources:
+Clockodo Menubar is an unofficial client. It has no server component: API
+requests go directly from the app to Clockodo. The app stores the email and API
+key in the macOS Keychain and keeps the last customer, project, and service
+selection in `UserDefaults`. It does not send data to analytics or a separate
+service. See [SECURITY.md](SECURITY.md) for the credential-handling policy.
 
-- [Clockodo API documentation](https://docs.clockodo.com/)
-- [Clockodo API deprecation notice](https://www.clockodo.com/en/blog/deprecation-of-legacy-api-endpoints-on-may-1-2026/)
-- [Clockodo stop clock API](https://www.clockodo.com/en/api/clock/)
-- [Clockodo API rate-limit help](https://support.clockodo.com/en/help-center/too-many-requests-please-try-again-later)
-- [Apple MenuBarExtra documentation](https://developer.apple.com/documentation/swiftui/menubarextra)
-
-## Build
-
-Requirements: macOS 13 or newer and Xcode 15 or newer.
+## Build From Source
 
 ```sh
+git clone https://github.com/navopw/clockodo-menubar.git
+cd clockodo-menubar
+
 swift test
 swift build
 ./scripts/build-app.sh
 open "dist/Clockodo Menubar.app"
 ```
 
-The app is intentionally packaged as an `LSUIElement`, so it appears in the menubar and not in the Dock. The ad-hoc signature is suitable for local use; a distributable build will need a Developer ID signature and notarization.
+The build targets the architecture of the Mac or runner that builds it. The
+local package is ad-hoc signed and is intended for development, not
+distribution. No third-party Swift packages are required.
 
-## Releases
+## API Notes
 
-The manual `Release` workflow on GitHub creates a macOS ZIP release. Select `patch`, `minor`, or `major`; the workflow increments the latest `vMAJOR.MINOR.PATCH` tag, runs the tests, builds the app, and publishes the archive. The first patch release is `v0.0.1`. Automatic in-app updates are intentionally not included.
+The client uses the current Clockodo routes:
 
-## Next Milestones
+- `GET /v2/clock` reads the running timer.
+- `POST /v2/clock` starts a timer. Customer and service are required.
+- `DELETE /v2/clock/{entry_id}` stops a timer.
+- `GET /v3/customers`, `GET /v4/projects`, and `GET /v4/services` load choices.
+- `GET /v2/entries` loads today's total.
 
-1. Add recent entries using `/v2/entries`.
-2. Add SwiftUI UI tests and broader state-transition coverage.
-3. Add an app icon, universal build, Developer ID signing, and notarization.
+Every request includes the Clockodo email, API key, and the required external
+application identifier. Requests use Clockodo's documented API and rate-limit
+behavior; the app deliberately avoids per-second polling.
+
+Read more in [PLAN.md](PLAN.md) and the [Clockodo API documentation](https://docs.clockodo.com/).
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidance.
+
+The release workflow is manually triggered from GitHub Actions. It increments
+the latest `vMAJOR.MINOR.PATCH` tag, runs the tests, builds the app, and
+publishes a ZIP archive. Automatic in-app updates are intentionally not
+included.
+
+## Roadmap
+
+- Add recent entries and links to the matching Clockodo pages.
+- Add SwiftUI UI tests and broader state-transition coverage.
+- Add an app icon, universal builds, Developer ID signing, and notarization.
+
+## Disclaimer
+
+This project is provided as-is, without warranty. Verify that timer actions
+and tracked totals match Clockodo before relying on them for billing or payroll.
+Clockodo is a trademark of its respective owner. This project is not affiliated
+with or endorsed by Clockodo.
+
+## License
+
+[MIT](LICENSE)
