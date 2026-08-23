@@ -12,6 +12,7 @@ Provide a small, native macOS menubar utility that makes the Clockodo stop clock
 - **Secrets:** macOS Keychain Services for the Clockodo email and API key.
 - **Local state:** `UserDefaults` for the last customer, project, and service selection only. No time-entry data or API keys are persisted there.
 - **Packaging:** A regular `.app` with `LSUIElement=true`; local packaging uses an ad-hoc signature.
+- **Releases:** A manually triggered GitHub Action creates versioned ZIP releases with automatic SemVer increments.
 
 ## API Contract
 
@@ -23,6 +24,7 @@ Provide a small, native macOS menubar utility that makes the Clockodo stop clock
 | Load customers | `GET /api/v3/customers` |
 | Load projects | `GET /api/v4/projects` |
 | Load services | `GET /api/v4/services` |
+| Load today's entries | `GET /api/v2/entries` with `time_since` and `time_until` |
 
 Every request includes `X-ClockodoApiUser`, `X-ClockodoApiKey`, and `X-Clockodo-External-Application`.
 
@@ -35,20 +37,22 @@ Every request includes `X-ClockodoApiUser`, `X-ClockodoApiKey`, and `X-Clockodo-
 - Start and stop the current Clockodo timer.
 - Display live elapsed time in the menubar.
 - Refresh the remote running state every 60 seconds.
+- Validate credentials before storing them.
+- Show connection state and retry actions.
+- Support launch-at-login.
+- Show today's tracked total.
+- Start the last valid selection with one click.
 
 ### Phase 2: Daily Workflow
 
-- Add launch-at-login with `SMAppService`.
-- Add today's tracked total from `/api/v2/entries`.
 - Show the last few entries and allow opening the matching Clockodo page.
-- Add a connection test and actionable 401/403/429 messages.
 
 ### Phase 3: Release Quality
 
 - Add SwiftUI UI tests and broader state-transition coverage; transport, decoding, and error-response tests are covered by the MVP test suite.
 - Add an app icon and accessibility labels.
 - Add a release build signed with Developer ID and notarized by Apple.
-- Add update delivery, either Sparkle or a manually documented release process.
+- Automatic in-app updates are intentionally not planned; GitHub releases are used instead.
 
 ## Deliberate Non-Goals
 

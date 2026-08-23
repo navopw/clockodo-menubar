@@ -9,7 +9,12 @@ A native macOS menubar client for the Clockodo stop clock.
 - Start a Clockodo timer with a customer, optional project, service, and note.
 - Stop the currently running timer.
 - Show live elapsed time in the menubar.
-- Refresh the running timer approximately once per minute to keep local state aligned.
+- Test credentials before storing them and show actionable connection states.
+- Offer retry and refresh actions for offline, permission, and rate-limit errors.
+- Optionally start automatically at login.
+- Show today's tracked total from `/v2/entries`.
+- Start the last valid customer, project, and service setup with one click.
+- Refresh the running timer approximately once per minute and today's total every five minutes.
 
 ## API Research
 
@@ -50,10 +55,12 @@ open "dist/Clockodo Menubar.app"
 
 The app is intentionally packaged as an `LSUIElement`, so it appears in the menubar and not in the Dock. The ad-hoc signature is suitable for local use; a distributable build will need a Developer ID signature and notarization.
 
+## Releases
+
+The manual `Release` workflow on GitHub creates a macOS ZIP release. Select `patch`, `minor`, or `major`; the workflow increments the latest `vMAJOR.MINOR.PATCH` tag, runs the tests, builds the app, and publishes the archive. The first patch release is `v0.0.1`. Automatic in-app updates are intentionally not included.
+
 ## Next Milestones
 
-1. Add launch-at-login using Apple's `SMAppService`.
-2. Add today's total and recent entries using `/v2/entries`.
-3. Add a first-run connection test and clearer handling for expired/invalid API keys.
-4. Add SwiftUI UI tests and broader state-transition coverage.
-5. Add app icon, release packaging, signing, and notarization.
+1. Add recent entries using `/v2/entries`.
+2. Add SwiftUI UI tests and broader state-transition coverage.
+3. Add an app icon, universal build, Developer ID signing, and notarization.

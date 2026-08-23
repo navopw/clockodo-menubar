@@ -1,5 +1,56 @@
 import Foundation
+import ServiceManagement
 import SwiftUI
+
+enum ConnectionState: Equatable, Sendable {
+    case unknown
+    case connecting
+    case connected
+    case offline
+    case unauthorized
+    case forbidden
+    case rateLimited
+
+    var title: String {
+        switch self {
+        case .unknown:
+            return "Connection not checked"
+        case .connecting:
+            return "Connecting..."
+        case .connected:
+            return "Connected"
+        case .offline:
+            return "Offline"
+        case .unauthorized:
+            return "Credentials rejected"
+        case .forbidden:
+            return "Access denied"
+        case .rateLimited:
+            return "Rate limited"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .unknown:
+            return "questionmark.circle"
+        case .connecting:
+            return "arrow.triangle.2.circlepath"
+        case .connected:
+            return "checkmark.circle.fill"
+        case .offline:
+            return "wifi.slash"
+        case .unauthorized, .forbidden:
+            return "exclamationmark.shield"
+        case .rateLimited:
+            return "clock.badge.exclamationmark"
+        }
+    }
+
+    var isHealthy: Bool {
+        self == .connected
+    }
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -10,7 +61,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var services: [Service] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isPerformingAction = false
+    @Published private(set) var isConnecting = false
     @Published private(set) var lastUpdated: Date?
+    @Published private(set) var todayTotalSeconds = 0
+    @Published private(set) var todayTotalUpdated: Date?
+    @Published private(set) var connectionState = ConnectionState.unknown
+    @Published private(set) var launchAtLoginEnabled: Bool
     @Published var selectedCustomerID: Int?
     @Published var selectedProjectID: Int?
     @Published var selectedServiceID: Int?
@@ -39,6 +95,7 @@ final class AppModel: ObservableObject {
         self.keychain = keychain
         self.clientFactory = clientFactory
         self.userDefaults = userDefaults
+        launchAtLoginEnabled = Self.isLaunchAtLoginEnabled
         loadStoredCredentials()
         selectedCustomerID = userDefaults.object(forKey: "selectedCustomerID") as? Int
         selectedProjectID = userDefaults.object(forKey: "selectedProjectID") as? Int
@@ -55,6 +112,24 @@ final class AppModel: ObservableObject {
 
     var isRunning: Bool {
         runningEntry != nil
+    }
+
+    var todayTotalText: String {
+        durationText(seconds: todayTotalSeconds)
+    }
+
+    var canStartLastConfiguration: Bool {
+        guard let selectedCustomerID,
+              let selectedServiceID,
+              customers.contains(where: { $0.id == selectedCustomerID }),
+              services.contains(where: { $0.id == selectedServiceID }) else {
+            return false
+        }
+
+        guard let selectedProjectID else { return true }
+        return projects.contains {
+            $0.id == selectedProjectID && $0.customersID == selectedCustomerID
+        }
     }
 
     var menuBarTitle: String {
@@ -104,7 +179,9 @@ final class AppModel: ObservableObject {
         backgroundTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await bootstrap()
+            await refreshTodayTotal()
             var lastClockRefresh = Date()
+            var lastTodayTotalRefresh = Date()
 
             while !Task.isCancelled {
                 if isRunning {
@@ -113,6 +190,10 @@ final class AppModel: ObservableObject {
                 if !isPerformingAction && Date().timeIntervalSince(lastClockRefresh) >= 60 {
                     await refreshClock()
                     lastClockRefresh = Date()
+                }
+                if !isPerformingAction && Date().timeIntervalSince(lastTodayTotalRefresh) >= 300 {
+                    await refreshTodayTotal()
+                    lastTodayTotalRefresh = Date()
                 }
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -131,16 +212,17 @@ final class AppModel: ObservableObject {
                   !isPerformingAction else { return }
             applyClockResponse(response)
             lastUpdated = Date()
+            connectionState = .connected
             errorMessage = nil
         } catch {
             guard generation == credentialsGeneration,
                   requestVersion == stateVersion,
                   !isPerformingAction else { return }
-            errorMessage = error.localizedDescription
+            record(error: error)
         }
     }
 
-    func bootstrap() async {
+    func bootstrap(initialClock: ClockResponse? = nil) async {
         guard let client else { return }
         guard !isBootstrapping else {
             bootstrapRequested = true
@@ -149,14 +231,25 @@ final class AppModel: ObservableObject {
 
         isLoading = true
         isBootstrapping = true
+        connectionState = .connecting
         let generation = credentialsGeneration
 
-        async let clockResponse: ClockResponse? = try? client.getClock()
+        var loadedClock: ClockResponse?
+        var clockError: Error?
+        if let initialClock {
+            loadedClock = initialClock
+        } else {
+            do {
+                loadedClock = try await client.getClock()
+            } catch {
+                clockError = error
+            }
+        }
+
         async let customerResponse: [Customer]? = customers.isEmpty ? try? client.getCustomers() : customers
         async let projectResponse: [Project]? = projects.isEmpty ? try? client.getProjects() : projects
         async let serviceResponse: [Service]? = services.isEmpty ? try? client.getServices() : services
 
-        let loadedClock = await clockResponse
         let loadedCustomers = await customerResponse
         let loadedProjects = await projectResponse
         let loadedServices = await serviceResponse
@@ -180,8 +273,12 @@ final class AppModel: ObservableObject {
             }
 
             if loadedClock != nil && loadedCustomers != nil && loadedProjects != nil && loadedServices != nil {
+                connectionState = .connected
                 errorMessage = nil
+            } else if let clockError {
+                record(error: clockError)
             } else {
+                connectionState = .offline
                 errorMessage = "Clockodo data could not be fully loaded. Use Refresh to try again."
             }
             if loadedCustomers != nil && loadedProjects != nil && loadedServices != nil {
@@ -195,6 +292,53 @@ final class AppModel: ObservableObject {
         if bootstrapRequested {
             bootstrapRequested = false
             await bootstrap()
+        }
+    }
+
+    func refreshTodayTotal() async {
+        guard let client else { return }
+        let generation = credentialsGeneration
+        let range = todayRange()
+
+        do {
+            let entries = try await client.getEntries(from: range.start, until: range.end)
+            guard generation == credentialsGeneration else { return }
+            todayTotalSeconds = entries.reduce(into: 0) { total, entry in
+                total += duration(for: entry, within: range, now: now)
+            }
+            todayTotalUpdated = Date()
+            if connectionState != .unauthorized,
+               connectionState != .forbidden,
+               connectionState != .rateLimited {
+                connectionState = .connected
+            }
+        } catch {
+            guard generation == credentialsGeneration else { return }
+            record(error: error)
+        }
+    }
+
+    func retryConnection() async {
+        await bootstrap()
+        await refreshTodayTotal()
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            launchAtLoginEnabled = Self.isLaunchAtLoginEnabled
+            if enabled && !launchAtLoginEnabled {
+                errorMessage = "Open System Settings to approve starting Clockodo at login."
+            } else {
+                errorMessage = nil
+            }
+        } catch {
+            launchAtLoginEnabled = Self.isLaunchAtLoginEnabled
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -242,7 +386,9 @@ final class AppModel: ObservableObject {
             applyClockResponse(response)
             note = ""
             lastUpdated = Date()
+            connectionState = .connected
             errorMessage = nil
+            await refreshTodayTotal()
         } catch {
             guard generation == credentialsGeneration, actionVersion == stateVersion else { return }
             errorMessage = error.localizedDescription
@@ -265,6 +411,8 @@ final class AppModel: ObservableObject {
             applyClockResponse(response)
             errorMessage = nil
             lastUpdated = Date()
+            connectionState = .connected
+            await refreshTodayTotal()
         } catch {
             guard generation == credentialsGeneration, actionVersion == stateVersion else { return }
             errorMessage = error.localizedDescription
@@ -279,13 +427,18 @@ final class AppModel: ObservableObject {
             errorMessage = "Enter both your Clockodo email address and API key."
             return
         }
+        guard !isConnecting else { return }
 
+        isConnecting = true
+        connectionState = .connecting
         do {
+            let newCredentials = ClockodoCredentials(email: email, apiKey: apiKey)
+            let newClient = clientFactory(newCredentials)
+            let initialClock = try await newClient.getClock()
             try keychain.save(email, account: "email")
             try keychain.save(apiKey, account: "apiKey")
-            let newCredentials = ClockodoCredentials(email: email, apiKey: apiKey)
             credentials = newCredentials
-            client = clientFactory(newCredentials)
+            client = newClient
             credentialsGeneration += 1
             stateVersion += 1
             runningEntry = nil
@@ -295,10 +448,12 @@ final class AppModel: ObservableObject {
             clockOffset = 0
             now = Date()
             errorMessage = nil
-            await bootstrap()
+            await bootstrap(initialClock: initialClock)
+            await refreshTodayTotal()
         } catch {
-            errorMessage = error.localizedDescription
+            record(error: error)
         }
+        isConnecting = false
     }
 
     func forgetCredentials() {
@@ -317,6 +472,9 @@ final class AppModel: ObservableObject {
             services = []
             clockOffset = 0
             now = Date()
+            todayTotalSeconds = 0
+            todayTotalUpdated = nil
+            connectionState = .unknown
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -332,6 +490,14 @@ final class AppModel: ObservableObject {
     func customerSelectionChanged() {
         selectedProjectID = validProjectID
         persistSelections()
+    }
+
+    func startLastConfiguration() async {
+        guard canStartLastConfiguration else {
+            errorMessage = "The saved timer setup is no longer available. Choose a customer and service."
+            return
+        }
+        await startClock()
     }
 
     private func loadStoredCredentials() {
@@ -363,4 +529,90 @@ final class AppModel: ObservableObject {
             $0.id == selectedProjectID && $0.customersID == selectedCustomerID
         } ? selectedProjectID : nil
     }
+
+    private static var isLaunchAtLoginEnabled: Bool {
+        switch SMAppService.mainApp.status {
+        case .enabled, .requiresApproval:
+            return true
+        case .notRegistered, .notFound:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    private func todayRange() -> (start: Date, end: Date) {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: Date())
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        return (start, end)
+    }
+
+    private func duration(
+        for entry: ClockodoEntry,
+        within range: (start: Date, end: Date),
+        now: Date
+    ) -> Int {
+        guard let start = ClockodoDate.date(from: entry.timeSince) else {
+            return max(0, entry.duration ?? 0)
+        }
+
+        let end: Date?
+        if let timeUntil = ClockodoDate.date(from: entry.timeUntil) {
+            end = timeUntil
+        } else if entry.id == runningEntry?.id {
+            end = now
+        } else {
+            end = nil
+        }
+
+        guard let end else { return max(0, entry.duration ?? 0) }
+
+        let overlapStart = max(start, range.start)
+        let overlapEnd = min(end, range.end)
+        guard overlapEnd > overlapStart else { return 0 }
+
+        if start >= range.start, end <= range.end, let duration = entry.duration {
+            return max(0, duration)
+        }
+        return max(0, Int(overlapEnd.timeIntervalSince(overlapStart)))
+    }
+
+    private func record(error: Error) {
+        connectionState = connectionState(for: error)
+        errorMessage = error.localizedDescription
+    }
+
+    private func connectionState(for error: Error) -> ConnectionState {
+        guard let apiError = error as? ClockodoAPIError else {
+            return .offline
+        }
+
+        switch apiError {
+        case let .httpStatus(status, _):
+            switch status {
+            case 401:
+                return .unauthorized
+            case 403:
+                return .forbidden
+            case 429:
+                return .rateLimited
+            default:
+                return .offline
+            }
+        case .transport:
+            return .offline
+        case .invalidExternalApplication, .invalidURL, .invalidResponse, .encoding, .decoding:
+            return .unknown
+        }
+    }
+}
+
+private func durationText(seconds: Int) -> String {
+    let hours = seconds / 3_600
+    let minutes = (seconds % 3_600) / 60
+    let remainingSeconds = seconds % 60
+    return hours > 0
+        ? String(format: "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        : String(format: "%02d:%02d", minutes, remainingSeconds)
 }

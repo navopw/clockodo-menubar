@@ -159,6 +159,37 @@ struct ClockodoClientTests {
         }
     }
 
+    @Test
+    func loadsEntriesForADateRange() async throws {
+        let recorder = RequestRecorder()
+        let client = makeClient { request in
+            recorder.request = request
+            return (
+                Self.response(status: 200),
+                Data(#"{"entries":[{"id":99,"time_since":"2026-08-23T09:00:00Z","time_until":"2026-08-23T10:00:00Z","duration":3600}]}"#.utf8)
+            )
+        }
+
+        let entries = try await client.getEntries(
+            from: "2026-08-23T00:00:00Z".date,
+            until: "2026-08-24T00:00:00Z".date
+        )
+
+        let request = try #require(recorder.request)
+        let query = try #require(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(query.contains(URLQueryItem(name: "time_since", value: "2026-08-23T00:00:00Z")))
+        #expect(query.contains(URLQueryItem(name: "time_until", value: "2026-08-24T00:00:00Z")))
+        #expect(entries.count == 1)
+        #expect(entries[0].duration == 3600)
+    }
+
+    @Test
+    func givesActionableMessagesForAuthenticationAndRateLimits() {
+        #expect(ClockodoAPIError.httpStatus(401, "").localizedDescription.contains("credentials"))
+        #expect(ClockodoAPIError.httpStatus(403, "").localizedDescription.contains("permissions"))
+        #expect(ClockodoAPIError.httpStatus(429, "").localizedDescription.contains("rate limit"))
+    }
+
     private static let successResponse = (
         response(status: 200),
         Data(#"{"running":null,"current_time":"2026-08-23T10:00:00Z"}"#.utf8)
@@ -189,12 +220,51 @@ func clearsAProjectWhenTheCustomerChanges() async {
         userDefaults: defaults
     )
     await model.bootstrap()
+    await model.refreshTodayTotal()
 
     model.selectedProjectID = 10
     model.selectedCustomerID = 2
     model.customerSelectionChanged()
 
     #expect(model.selectedProjectID == nil)
+    #expect(model.todayTotalSeconds == 3600)
+    #expect(model.connectionState == .connected)
+}
+
+@Test
+@MainActor
+func clipsAnEntryThatCrossesMidnightToToday() async {
+    let dayStart = Calendar.current.startOfDay(for: Date())
+    let entry = ClockodoEntry(
+        id: 99,
+        customersID: nil,
+        projectsID: nil,
+        servicesID: nil,
+        customersName: nil,
+        projectsName: nil,
+        servicesName: nil,
+        text: nil,
+        timeSince: ClockodoDate.string(from: dayStart.addingTimeInterval(-3_600)),
+        timeUntil: ClockodoDate.string(from: dayStart.addingTimeInterval(3_600)),
+        duration: 86_400,
+        billable: nil,
+        clocked: nil
+    )
+    let store = TestCredentialStore(email: "person@example.com", apiKey: "secret")
+    let client = TestClockodoClient(entries: [entry])
+    let suiteName = "ClockodoMenubarTests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let model = AppModel(
+        keychain: store,
+        clientFactory: { _ in client },
+        userDefaults: defaults
+    )
+    await model.bootstrap()
+    await model.refreshTodayTotal()
+
+    #expect(model.todayTotalSeconds == 3_600)
 }
 
 private func makeClient(
@@ -278,6 +348,33 @@ private final class TestCredentialStore: CredentialStore, @unchecked Sendable {
 }
 
 private final class TestClockodoClient: ClockodoAPIClient, @unchecked Sendable {
+    private let entries: [ClockodoEntry]
+
+    init(entries: [ClockodoEntry]? = nil) {
+        if let entries {
+            self.entries = entries
+        } else {
+            let start = Calendar.current.startOfDay(for: Date()).addingTimeInterval(32_400)
+            self.entries = [
+                ClockodoEntry(
+                    id: 99,
+                    customersID: nil,
+                    projectsID: nil,
+                    servicesID: nil,
+                    customersName: nil,
+                    projectsName: nil,
+                    servicesName: nil,
+                    text: nil,
+                    timeSince: ClockodoDate.string(from: start),
+                    timeUntil: ClockodoDate.string(from: start.addingTimeInterval(3_600)),
+                    duration: 3_600,
+                    billable: nil,
+                    clocked: nil
+                )
+            ]
+        }
+    }
+
     func getClock() async throws -> ClockResponse {
         ClockResponse(running: nil, currentTime: "2026-08-23T10:00:00Z")
     }
@@ -292,6 +389,10 @@ private final class TestClockodoClient: ClockodoAPIClient, @unchecked Sendable {
 
     func getServices() async throws -> [Service] {
         [Service(id: 20, name: "Service", active: true)]
+    }
+
+    func getEntries(from: Date, until: Date) async throws -> [ClockodoEntry] {
+        entries
     }
 
     func startClock(customerID: Int, serviceID: Int, projectID: Int?, text: String?) async throws -> ClockResponse {

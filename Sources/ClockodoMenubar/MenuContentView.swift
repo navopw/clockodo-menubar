@@ -52,6 +52,10 @@ struct MenuContentView: View {
 
     private var timerContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            connectionStatus
+
+            todaySummary
+
             if model.isRunning {
                 runningTimer
             } else {
@@ -62,12 +66,12 @@ struct MenuContentView: View {
 
             HStack {
                 Button {
-                    Task { await model.refreshClock() }
+                    Task { await model.retryConnection() }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .disabled(model.isLoading || model.isPerformingAction)
+                .disabled(model.isLoading || model.isPerformingAction || model.isConnecting)
 
                 Spacer()
 
@@ -76,6 +80,38 @@ struct MenuContentView: View {
                 }
                 .buttonStyle(.borderless)
             }
+        }
+    }
+
+    private var connectionStatus: some View {
+        HStack(spacing: 8) {
+            Image(systemName: model.connectionState.systemImage)
+                .foregroundStyle(model.connectionState.isHealthy ? .green : .secondary)
+            Text(model.connectionState.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            if !model.connectionState.isHealthy && model.connectionState != .connecting {
+                Button("Retry") {
+                    Task { await model.retryConnection() }
+                }
+                .buttonStyle(.borderless)
+                .disabled(model.isLoading || model.isConnecting)
+            }
+        }
+    }
+
+    private var todaySummary: some View {
+        HStack {
+            Label("Today", systemImage: "calendar")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(model.todayTotalText)
+                .font(.callout.weight(.medium))
+                .monospacedDigit()
         }
     }
 
@@ -165,14 +201,24 @@ struct MenuContentView: View {
                     .textFieldStyle(.roundedBorder)
 
                 Button {
-                    model.persistSelections()
-                    Task { await model.startClock() }
+                    Task {
+                        if model.canStartLastConfiguration {
+                            await model.startLastConfiguration()
+                        } else {
+                            await model.startClock()
+                        }
+                    }
                 } label: {
-                    Label(model.isPerformingAction ? "Starting..." : "Start timer", systemImage: "play.fill")
+                    Label(
+                        model.isPerformingAction
+                            ? "Starting..."
+                            : (model.canStartLastConfiguration ? "Start last setup" : "Start timer"),
+                        systemImage: "play.fill"
+                    )
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.selectedCustomerID == nil || model.selectedServiceID == nil || model.isPerformingAction)
+                .disabled(!model.canStartLastConfiguration || model.isPerformingAction)
             }
         }
         .onChange(of: model.selectedCustomerID) { _ in
@@ -226,13 +272,25 @@ struct CredentialsView: View {
             Button {
                 Task { await model.saveCredentials(email: email, apiKey: apiKey) }
             } label: {
-                Text("Save and connect")
+                Text(model.isConnecting ? "Checking connection..." : "Save and connect")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || apiKey.isEmpty)
+            .disabled(
+                email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || apiKey.isEmpty
+                    || model.isConnecting
+            )
 
             if allowForget {
+                Toggle(
+                    "Start at login",
+                    isOn: Binding(
+                        get: { model.launchAtLoginEnabled },
+                        set: { model.setLaunchAtLogin($0) }
+                    )
+                )
+
                 Button("Forget credentials") {
                     model.forgetCredentials()
                 }

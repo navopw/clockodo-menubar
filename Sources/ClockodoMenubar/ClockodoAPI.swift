@@ -14,6 +14,7 @@ protocol ClockodoAPIClient: Sendable {
     func getCustomers() async throws -> [Customer]
     func getProjects() async throws -> [Project]
     func getServices() async throws -> [Service]
+    func getEntries(from: Date, until: Date) async throws -> [ClockodoEntry]
     func startClock(
         customerID: Int,
         serviceID: Int,
@@ -115,6 +116,10 @@ private struct CollectionResponse<Value: Decodable>: Decodable {
     let data: [Value]
 }
 
+private struct EntriesResponse: Decodable {
+    let entries: [ClockodoEntry]
+}
+
 private struct StartClockRequest: Encodable {
     let customersID: Int
     let servicesID: Int
@@ -147,7 +152,16 @@ enum ClockodoAPIError: LocalizedError {
         case .invalidResponse:
             return "Clockodo returned an unreadable response."
         case let .httpStatus(status, message):
-            return "Clockodo returned HTTP \(status): \(message)"
+            switch status {
+            case 401:
+                return "Clockodo rejected the credentials. Check the email address and API key."
+            case 403:
+                return "Clockodo denied access. Check the API key permissions."
+            case 429:
+                return "Clockodo rate limit reached. Wait a moment and try again."
+            default:
+                return "Clockodo returned HTTP \(status): \(message)"
+            }
         case let .encoding(error), let .decoding(error):
             return "Clockodo returned data the app could not process: \(error.localizedDescription)"
         case let .transport(error):
@@ -192,6 +206,17 @@ final class ClockodoClient: ClockodoAPIClient, Sendable {
             queryItems: [URLQueryItem(name: "items_per_page", value: "1000")]
         )
         return response.data.filter { $0.active != false }
+    }
+
+    func getEntries(from: Date, until: Date) async throws -> [ClockodoEntry] {
+        let response: EntriesResponse = try await send(
+            path: "/v2/entries",
+            queryItems: [
+                URLQueryItem(name: "time_since", value: ClockodoDate.string(from: from)),
+                URLQueryItem(name: "time_until", value: ClockodoDate.string(from: until)),
+            ]
+        )
+        return response.entries
     }
 
     func startClock(
@@ -311,6 +336,12 @@ enum ClockodoDate {
     static func date(from value: String?) -> Date? {
         guard let value else { return nil }
         return try? formatStyle.parse(value)
+    }
+
+    static func string(from value: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+        return formatter.string(from: value)
     }
 }
 
