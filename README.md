@@ -26,6 +26,9 @@ running time without opening the Clockodo web app.
 - Xcode 16 or newer, including a Swift 6 toolchain
 - A Clockodo account with an API key
 
+Prebuilt release archives currently target Apple Silicon. Intel Macs can run
+the source build, but a universal release is not available yet.
+
 ## Installation
 
 When a release is published, download its ZIP from [GitHub Releases](https://github.com/navopw/clockodo-menubar/releases),
@@ -69,10 +72,11 @@ distribution. No third-party Swift packages are required.
 The client uses the current Clockodo routes:
 
 - `GET /v2/clock` reads the running timer.
+- `GET /v4/users/me` identifies the authenticated user and its timezone.
 - `POST /v2/clock` starts a timer. Customer and service are required.
 - `DELETE /v2/clock/{entry_id}` stops a timer.
 - `GET /v3/customers`, `GET /v4/projects`, and `GET /v4/services` load choices.
-- `GET /v2/entries` loads today's total.
+- `GET /v2/entries` loads today's total, filtered to the authenticated user.
 
 Every request includes the Clockodo email, API key, and the required external
 application identifier. Requests use Clockodo's documented API and rate-limit
@@ -84,9 +88,9 @@ Read more in [PLAN.md](PLAN.md) and the [Clockodo API documentation](https://doc
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidance.
 
-The release workflow is manually triggered from GitHub Actions. It increments
-the latest `vMAJOR.MINOR.PATCH` tag, runs the tests, builds the app, and
-publishes a ZIP archive. Automatic in-app updates are intentionally not
+The release workflow is manually triggered from GitHub Actions on `main`. It
+increments the latest `vMAJOR.MINOR.PATCH` tag, runs the tests, builds the app,
+and publishes a ZIP archive. Automatic in-app updates are intentionally not
 included.
 
 ## Roadmap

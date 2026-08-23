@@ -19,12 +19,13 @@ Provide a small, native macOS menubar utility that makes the Clockodo stop clock
 | App operation | Clockodo request |
 | --- | --- |
 | Read running timer | `GET /api/v2/clock` |
+| Read authenticated user | `GET /api/v4/users/me` |
 | Start timer | `POST /api/v2/clock` |
 | Stop timer | `DELETE /api/v2/clock/{entry_id}` |
 | Load customers | `GET /api/v3/customers` |
 | Load projects | `GET /api/v4/projects` |
 | Load services | `GET /api/v4/services` |
-| Load today's entries | `GET /api/v2/entries` with `time_since` and `time_until` |
+| Load today's entries | `GET /api/v2/entries` with `time_since`, `time_until`, and `filter[users_id]` |
 
 Every request includes `X-ClockodoApiUser`, `X-ClockodoApiKey`, and `X-Clockodo-External-Application`.
 
@@ -49,7 +50,7 @@ Every request includes `X-ClockodoApiUser`, `X-ClockodoApiKey`, and `X-Clockodo-
 
 ### Phase 3: Release Quality
 
-- Add SwiftUI UI tests and broader state-transition coverage; transport, decoding, and error-response tests are covered by the MVP test suite.
+- Add SwiftUI UI tests and broader state-transition coverage; decoding and HTTP error-response tests are covered by the MVP test suite.
 - Add an app icon and accessibility labels.
 - Add a release build signed with Developer ID and notarized by Apple.
 - Automatic in-app updates are intentionally not planned; GitHub releases are used instead.

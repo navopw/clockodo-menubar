@@ -98,7 +98,7 @@ struct MenuContentView: View {
                     Task { await model.retryConnection() }
                 }
                 .buttonStyle(.borderless)
-                .disabled(model.isLoading || model.isConnecting)
+                .disabled(model.isLoading || model.isConnecting || model.isPerformingAction)
             }
         }
     }

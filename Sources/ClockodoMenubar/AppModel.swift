@@ -55,6 +55,7 @@ enum ConnectionState: Equatable, Sendable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var credentials: ClockodoCredentials?
+    @Published private(set) var currentUser: ClockodoUser?
     @Published private(set) var runningEntry: ClockodoEntry?
     @Published private(set) var customers: [Customer] = []
     @Published private(set) var projects: [Project] = []
@@ -84,6 +85,7 @@ final class AppModel: ObservableObject {
     private var credentialsGeneration = 0
     private var stateVersion = 0
     private var clockOffset: TimeInterval = 0
+    private var catalogsLoaded = false
 
     init(
         keychain: any CredentialStore = KeychainStore(),
@@ -173,13 +175,15 @@ final class AppModel: ObservableObject {
         return services.first(where: { $0.id == id })?.name ?? "Service #\(id)"
     }
 
-    func startBackgroundUpdates() {
+    func startBackgroundUpdates(performInitialBootstrap: Bool = true) {
         guard backgroundTask == nil else { return }
 
         backgroundTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await bootstrap()
-            await refreshTodayTotal()
+            if performInitialBootstrap {
+                await bootstrap()
+                await refreshTodayTotal()
+            }
             var lastClockRefresh = Date()
             var lastTodayTotalRefresh = Date()
 
@@ -224,6 +228,7 @@ final class AppModel: ObservableObject {
 
     func bootstrap(initialClock: ClockResponse? = nil) async {
         guard let client else { return }
+        guard !isPerformingAction else { return }
         guard !isBootstrapping else {
             bootstrapRequested = true
             return
@@ -233,55 +238,74 @@ final class AppModel: ObservableObject {
         isBootstrapping = true
         connectionState = .connecting
         let generation = credentialsGeneration
+        let requestVersion = stateVersion
 
-        var loadedClock: ClockResponse?
-        var clockError: Error?
+        async let userRequest = loadResult { try await client.getCurrentUser() }
+        async let customerRequest = loadResult { try await client.getCustomers() }
+        async let projectRequest = loadResult { try await client.getProjects() }
+        async let serviceRequest = loadResult { try await client.getServices() }
+
+        let clockResult: LoadResult<ClockResponse>
         if let initialClock {
-            loadedClock = initialClock
+            clockResult = LoadResult(value: initialClock)
         } else {
-            do {
-                loadedClock = try await client.getClock()
-            } catch {
-                clockError = error
-            }
+            clockResult = await loadResult { try await client.getClock() }
         }
 
-        async let customerResponse: [Customer]? = customers.isEmpty ? try? client.getCustomers() : customers
-        async let projectResponse: [Project]? = projects.isEmpty ? try? client.getProjects() : projects
-        async let serviceResponse: [Service]? = services.isEmpty ? try? client.getServices() : services
+        let userResult = await userRequest
+        let customerResult = await customerRequest
+        let projectResult = await projectRequest
+        let serviceResult = await serviceRequest
 
-        let loadedCustomers = await customerResponse
-        let loadedProjects = await projectResponse
-        let loadedServices = await serviceResponse
-
-        if generation == credentialsGeneration {
-            if let loadedClock {
+        if generation == credentialsGeneration,
+           requestVersion == stateVersion,
+           !isPerformingAction {
+            if let loadedClock = clockResult.value {
                 applyClockResponse(loadedClock)
             }
-            if let loadedCustomers {
+            if let loadedUser = userResult.value {
+                currentUser = loadedUser
+            }
+            if let loadedCustomers = customerResult.value {
                 customers = loadedCustomers
             }
-            if let loadedProjects {
+            if let loadedProjects = projectResult.value {
                 projects = loadedProjects
             }
-            if let loadedServices {
+            if let loadedServices = serviceResult.value {
                 services = loadedServices
             }
 
-            if loadedClock != nil || loadedCustomers != nil || loadedProjects != nil || loadedServices != nil {
+            if clockResult.value != nil
+                || userResult.value != nil
+                || customerResult.value != nil
+                || projectResult.value != nil
+                || serviceResult.value != nil {
                 lastUpdated = Date()
             }
 
-            if loadedClock != nil && loadedCustomers != nil && loadedProjects != nil && loadedServices != nil {
+            catalogsLoaded = customerResult.value != nil
+                && projectResult.value != nil
+                && serviceResult.value != nil
+
+            if clockResult.value != nil && userResult.value != nil && catalogsLoaded {
                 connectionState = .connected
                 errorMessage = nil
-            } else if let clockError {
-                record(error: clockError)
+            } else if let error = firstError(
+                from: [
+                    clockResult.error,
+                    userResult.error,
+                    customerResult.error,
+                    projectResult.error,
+                    serviceResult.error,
+                ]
+            ) {
+                record(error: error)
             } else {
                 connectionState = .offline
                 errorMessage = "Clockodo data could not be fully loaded. Use Refresh to try again."
             }
-            if loadedCustomers != nil && loadedProjects != nil && loadedServices != nil {
+            if catalogsLoaded {
                 selectFirstAvailableValuesIfNeeded()
             }
         }
@@ -296,29 +320,32 @@ final class AppModel: ObservableObject {
     }
 
     func refreshTodayTotal() async {
-        guard let client else { return }
+        guard let client, let userID = currentUser?.id else { return }
         let generation = credentialsGeneration
+        let requestVersion = stateVersion
         let range = todayRange()
 
         do {
-            let entries = try await client.getEntries(from: range.start, until: range.end)
-            guard generation == credentialsGeneration else { return }
+            let entries = try await client.getEntries(from: range.start, until: range.end, userID: userID)
+            guard generation == credentialsGeneration, requestVersion == stateVersion else { return }
             todayTotalSeconds = entries.reduce(into: 0) { total, entry in
                 total += duration(for: entry, within: range, now: now)
             }
             todayTotalUpdated = Date()
-            if connectionState != .unauthorized,
+            if catalogsLoaded,
+               connectionState != .unauthorized,
                connectionState != .forbidden,
                connectionState != .rateLimited {
                 connectionState = .connected
             }
         } catch {
-            guard generation == credentialsGeneration else { return }
+            guard generation == credentialsGeneration, requestVersion == stateVersion else { return }
             record(error: error)
         }
     }
 
     func retryConnection() async {
+        guard !isPerformingAction else { return }
         await bootstrap()
         await refreshTodayTotal()
     }
@@ -435,21 +462,23 @@ final class AppModel: ObservableObject {
             let newCredentials = ClockodoCredentials(email: email, apiKey: apiKey)
             let newClient = clientFactory(newCredentials)
             let initialClock = try await newClient.getClock()
-            try keychain.save(email, account: "email")
-            try keychain.save(apiKey, account: "apiKey")
+            try replaceStoredCredentials(email: email, apiKey: apiKey)
             credentials = newCredentials
             client = newClient
             credentialsGeneration += 1
             stateVersion += 1
+            currentUser = nil
             runningEntry = nil
             customers = []
             projects = []
             services = []
+            catalogsLoaded = false
             clockOffset = 0
             now = Date()
             errorMessage = nil
             await bootstrap(initialClock: initialClock)
             await refreshTodayTotal()
+            startBackgroundUpdates(performInitialBootstrap: false)
         } catch {
             record(error: error)
         }
@@ -458,18 +487,19 @@ final class AppModel: ObservableObject {
 
     func forgetCredentials() {
         do {
-            try keychain.delete(account: "email")
-            try keychain.delete(account: "apiKey")
+            try clearStoredCredentials()
             credentialsGeneration += 1
             stateVersion += 1
             backgroundTask?.cancel()
             backgroundTask = nil
             credentials = nil
             client = nil
+            currentUser = nil
             runningEntry = nil
             customers = []
             projects = []
             services = []
+            catalogsLoaded = false
             clockOffset = 0
             now = Date()
             todayTotalSeconds = 0
@@ -512,6 +542,46 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func replaceStoredCredentials(email: String, apiKey: String) throws {
+        let previousEmail = try keychain.read(account: "email")
+        let previousAPIKey = try keychain.read(account: "apiKey")
+
+        do {
+            try keychain.save(email, account: "email")
+            try keychain.save(apiKey, account: "apiKey")
+        } catch {
+            restoreStoredCredential(previousEmail, account: "email")
+            restoreStoredCredential(previousAPIKey, account: "apiKey")
+            throw error
+        }
+    }
+
+    private func clearStoredCredentials() throws {
+        let previousEmail = try keychain.read(account: "email")
+        let previousAPIKey = try keychain.read(account: "apiKey")
+
+        do {
+            try keychain.delete(account: "email")
+            try keychain.delete(account: "apiKey")
+        } catch {
+            restoreStoredCredential(previousEmail, account: "email")
+            restoreStoredCredential(previousAPIKey, account: "apiKey")
+            throw error
+        }
+    }
+
+    private func restoreStoredCredential(_ value: String?, account: String) {
+        do {
+            if let value {
+                try keychain.save(value, account: account)
+            } else {
+                try keychain.delete(account: account)
+            }
+        } catch {
+            // Preserve the original Keychain error when rollback is not possible.
+        }
+    }
+
     private func selectFirstAvailableValuesIfNeeded() {
         if selectedCustomerID == nil || !customers.contains(where: { $0.id == selectedCustomerID }) {
             selectedCustomerID = customers.first?.id
@@ -542,7 +612,8 @@ final class AppModel: ObservableObject {
     }
 
     private func todayRange() -> (start: Date, end: Date) {
-        let calendar = Calendar.current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: currentUser?.timezone ?? "") ?? .current
         let start = calendar.startOfDay(for: Date())
         let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
         return (start, end)
@@ -606,6 +677,35 @@ final class AppModel: ObservableObject {
             return .unknown
         }
     }
+}
+
+private struct LoadResult<Value: Sendable>: @unchecked Sendable {
+    let value: Value?
+    let error: Error?
+
+    init(value: Value) {
+        self.value = value
+        error = nil
+    }
+
+    init(error: Error) {
+        value = nil
+        self.error = error
+    }
+}
+
+private func loadResult<Value: Sendable>(
+    _ operation: @escaping @Sendable () async throws -> Value
+) async -> LoadResult<Value> {
+    do {
+        return LoadResult(value: try await operation())
+    } catch {
+        return LoadResult(error: error)
+    }
+}
+
+private func firstError(from errors: [Error?]) -> Error? {
+    errors.compactMap { $0 }.first
 }
 
 private func durationText(seconds: Int) -> String {

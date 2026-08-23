@@ -11,10 +11,11 @@ struct ClockodoCredentials: Sendable, Equatable {
 
 protocol ClockodoAPIClient: Sendable {
     func getClock() async throws -> ClockResponse
+    func getCurrentUser() async throws -> ClockodoUser
     func getCustomers() async throws -> [Customer]
     func getProjects() async throws -> [Project]
     func getServices() async throws -> [Service]
-    func getEntries(from: Date, until: Date) async throws -> [ClockodoEntry]
+    func getEntries(from: Date, until: Date, userID: Int) async throws -> [ClockodoEntry]
     func startClock(
         customerID: Int,
         serviceID: Int,
@@ -26,6 +27,7 @@ protocol ClockodoAPIClient: Sendable {
 
 struct ClockodoEntry: Codable, Identifiable, Sendable {
     let id: Int
+    let usersID: Int?
     let customersID: Int?
     let projectsID: Int?
     let servicesID: Int?
@@ -41,6 +43,7 @@ struct ClockodoEntry: Codable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case usersID = "users_id"
         case customersID = "customers_id"
         case projectsID = "projects_id"
         case servicesID = "services_id"
@@ -72,6 +75,11 @@ struct ClockodoEntry: Codable, Identifiable, Sendable {
     var serviceDisplayName: String? {
         servicesName
     }
+}
+
+struct ClockodoUser: Codable, Sendable, Equatable {
+    let id: Int
+    let timezone: String?
 }
 
 struct ClockResponse: Codable, Sendable {
@@ -114,10 +122,26 @@ struct Service: Codable, Identifiable, Sendable {
 
 private struct CollectionResponse<Value: Decodable>: Decodable {
     let data: [Value]
+    let paging: Paging?
 }
 
 private struct EntriesResponse: Decodable {
     let entries: [ClockodoEntry]
+    let paging: Paging?
+}
+
+private struct UserResponse: Decodable {
+    let data: ClockodoUser
+}
+
+private struct Paging: Decodable {
+    let currentPage: Int
+    let countPages: Int
+
+    enum CodingKeys: String, CodingKey {
+        case currentPage = "current_page"
+        case countPages = "count_pages"
+    }
 }
 
 private struct StartClockRequest: Encodable {
@@ -184,39 +208,49 @@ final class ClockodoClient: ClockodoAPIClient, Sendable {
         try await send(path: "/v2/clock")
     }
 
+    func getCurrentUser() async throws -> ClockodoUser {
+        let response: UserResponse = try await send(path: "/v4/users/me")
+        return response.data
+    }
+
     func getCustomers() async throws -> [Customer] {
-        let response: CollectionResponse<Customer> = try await send(
+        let data = try await getAllCollectionPages(
             path: "/v3/customers",
-            queryItems: [URLQueryItem(name: "items_per_page", value: "1000")]
+            itemsPerPage: 1000,
+            as: Customer.self
         )
-        return response.data.filter { $0.active != false }
+        return data.filter { $0.active != false }
     }
 
     func getProjects() async throws -> [Project] {
-        let response: CollectionResponse<Project> = try await send(
+        let data = try await getAllCollectionPages(
             path: "/v4/projects",
-            queryItems: [URLQueryItem(name: "items_per_page", value: "5000")]
+            itemsPerPage: 5000,
+            as: Project.self
         )
-        return response.data.filter { $0.active != false && $0.completed != true }
+        return data.filter { $0.active != false && $0.completed != true }
     }
 
     func getServices() async throws -> [Service] {
-        let response: CollectionResponse<Service> = try await send(
+        let data = try await getAllCollectionPages(
             path: "/v4/services",
-            queryItems: [URLQueryItem(name: "items_per_page", value: "1000")]
+            itemsPerPage: 1000,
+            as: Service.self
         )
-        return response.data.filter { $0.active != false }
+        return data.filter { $0.active != false }
     }
 
-    func getEntries(from: Date, until: Date) async throws -> [ClockodoEntry] {
-        let response: EntriesResponse = try await send(
+    func getEntries(from: Date, until: Date, userID: Int) async throws -> [ClockodoEntry] {
+        let entries = try await getAllEntryPages(
             path: "/v2/entries",
             queryItems: [
                 URLQueryItem(name: "time_since", value: ClockodoDate.string(from: from)),
                 URLQueryItem(name: "time_until", value: ClockodoDate.string(from: until)),
-            ]
+                URLQueryItem(name: "filter[users_id]", value: String(userID)),
+            ],
+            itemsPerPage: 1000
         )
-        return response.entries
+        return entries.filter { $0.usersID == userID }
     }
 
     func startClock(
@@ -236,6 +270,56 @@ final class ClockodoClient: ClockodoAPIClient, Sendable {
 
     func stopClock(entryID: Int) async throws -> ClockResponse {
         try await send(path: "/v2/clock/\(entryID)", method: "DELETE")
+    }
+
+    private func getAllCollectionPages<Value: Decodable>(
+        path: String,
+        itemsPerPage: Int,
+        as: Value.Type
+    ) async throws -> [Value] {
+        var values: [Value] = []
+        var page = 1
+
+        while true {
+            let response: CollectionResponse<Value> = try await send(
+                path: path,
+                queryItems: [
+                    URLQueryItem(name: "items_per_page", value: String(itemsPerPage)),
+                    URLQueryItem(name: "page", value: String(page)),
+                ]
+            )
+            values.append(contentsOf: response.data)
+
+            guard let paging = response.paging, paging.currentPage < paging.countPages else {
+                return values
+            }
+            page = paging.currentPage + 1
+        }
+    }
+
+    private func getAllEntryPages(
+        path: String,
+        queryItems: [URLQueryItem],
+        itemsPerPage: Int
+    ) async throws -> [ClockodoEntry] {
+        var entries: [ClockodoEntry] = []
+        var page = 1
+
+        while true {
+            let response: EntriesResponse = try await send(
+                path: path,
+                queryItems: queryItems + [
+                    URLQueryItem(name: "items_per_page", value: String(itemsPerPage)),
+                    URLQueryItem(name: "page", value: String(page)),
+                ]
+            )
+            entries.append(contentsOf: response.entries)
+
+            guard let paging = response.paging, paging.currentPage < paging.countPages else {
+                return entries
+            }
+            page = paging.currentPage + 1
+        }
     }
 
     private func send<Response: Decodable>(

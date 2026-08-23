@@ -9,6 +9,7 @@ func decodesRunningClockResponse() throws {
         {
           "running": {
             "id": 123,
+            "users_id": 7,
             "customers_id": 10,
             "projects_id": 20,
             "services_id": 30,
@@ -30,6 +31,7 @@ func decodesRunningClockResponse() throws {
     let response = try JSONDecoder().decode(ClockResponse.self, from: data)
 
     #expect(response.running?.id == 123)
+    #expect(response.running?.usersID == 7)
     #expect(response.running?.displayName == "Acme / Website / Development")
     #expect(response.running?.customerDisplayName == "Acme")
     #expect(response.running?.projectDisplayName == "Website")
@@ -166,21 +168,68 @@ struct ClockodoClientTests {
             recorder.request = request
             return (
                 Self.response(status: 200),
-                Data(#"{"entries":[{"id":99,"time_since":"2026-08-23T09:00:00Z","time_until":"2026-08-23T10:00:00Z","duration":3600}]}"#.utf8)
+                Data(#"{"entries":[{"id":99,"users_id":7,"time_since":"2026-08-23T09:00:00Z","time_until":"2026-08-23T10:00:00Z","duration":3600}]}"#.utf8)
             )
         }
 
         let entries = try await client.getEntries(
             from: "2026-08-23T00:00:00Z".date,
-            until: "2026-08-24T00:00:00Z".date
+            until: "2026-08-24T00:00:00Z".date,
+            userID: 7
         )
 
         let request = try #require(recorder.request)
         let query = try #require(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems)
         #expect(query.contains(URLQueryItem(name: "time_since", value: "2026-08-23T00:00:00Z")))
         #expect(query.contains(URLQueryItem(name: "time_until", value: "2026-08-24T00:00:00Z")))
+        #expect(query.contains(URLQueryItem(name: "filter[users_id]", value: "7")))
         #expect(entries.count == 1)
         #expect(entries[0].duration == 3600)
+    }
+
+    @Test
+    func loadsCurrentUserDetails() async throws {
+        let client = makeClient { request in
+            #expect(request.url?.path == "/api/v4/users/me")
+            return (
+                Self.response(status: 200),
+                Data(#"{"data":{"id":7,"timezone":"Europe/Berlin"}}"#.utf8)
+            )
+        }
+
+        let user = try await client.getCurrentUser()
+
+        #expect(user == ClockodoUser(id: 7, timezone: "Europe/Berlin"))
+    }
+
+    @Test
+    func loadsAllPagesAndFiltersEntriesByUser() async throws {
+        let client = makeClient { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let page = query.first(where: { $0.name == "page" })?.value
+            let body: String
+            switch request.url?.path {
+            case "/api/v3/customers":
+                body = page == "1"
+                    ? #"{"paging":{"current_page":1,"count_pages":2},"data":[{"id":1,"name":"First"}]}"#
+                    : #"{"paging":{"current_page":2,"count_pages":2},"data":[{"id":2,"name":"Second"}]}"#
+            case "/api/v2/entries":
+                body = page == "1"
+                    ? #"{"paging":{"current_page":1,"count_pages":2},"entries":[{"id":1,"users_id":7,"duration":60},{"id":2,"users_id":8,"duration":600}]}"#
+                    : #"{"paging":{"current_page":2,"count_pages":2},"entries":[{"id":3,"users_id":7,"duration":120}]}"#
+            default:
+                body = #"{"paging":{"current_page":1,"count_pages":1},"data":[]}"#
+            }
+            return (Self.response(status: 200), Data(body.utf8))
+        }
+
+        #expect(try await client.getCustomers().map(\.id) == [1, 2])
+        let entries = try await client.getEntries(
+            from: "2026-08-23T00:00:00Z".date,
+            until: "2026-08-24T00:00:00Z".date,
+            userID: 7
+        )
+        #expect(entries.map(\.id) == [1, 3])
     }
 
     @Test
@@ -237,6 +286,7 @@ func clipsAnEntryThatCrossesMidnightToToday() async {
     let dayStart = Calendar.current.startOfDay(for: Date())
     let entry = ClockodoEntry(
         id: 99,
+        usersID: 7,
         customersID: nil,
         projectsID: nil,
         servicesID: nil,
@@ -358,6 +408,7 @@ private final class TestClockodoClient: ClockodoAPIClient, @unchecked Sendable {
             self.entries = [
                 ClockodoEntry(
                     id: 99,
+                    usersID: 7,
                     customersID: nil,
                     projectsID: nil,
                     servicesID: nil,
@@ -379,6 +430,10 @@ private final class TestClockodoClient: ClockodoAPIClient, @unchecked Sendable {
         ClockResponse(running: nil, currentTime: "2026-08-23T10:00:00Z")
     }
 
+    func getCurrentUser() async throws -> ClockodoUser {
+        ClockodoUser(id: 7, timezone: TimeZone.current.identifier)
+    }
+
     func getCustomers() async throws -> [Customer] {
         [Customer(id: 1, name: "Customer A", active: true), Customer(id: 2, name: "Customer B", active: true)]
     }
@@ -391,7 +446,7 @@ private final class TestClockodoClient: ClockodoAPIClient, @unchecked Sendable {
         [Service(id: 20, name: "Service", active: true)]
     }
 
-    func getEntries(from: Date, until: Date) async throws -> [ClockodoEntry] {
+    func getEntries(from: Date, until: Date, userID: Int) async throws -> [ClockodoEntry] {
         entries
     }
 
