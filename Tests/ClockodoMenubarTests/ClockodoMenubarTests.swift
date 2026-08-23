@@ -31,8 +31,21 @@ func decodesRunningClockResponse() throws {
 
     #expect(response.running?.id == 123)
     #expect(response.running?.displayName == "Acme / Website / Development")
+    #expect(response.running?.customerDisplayName == "Acme")
+    #expect(response.running?.projectDisplayName == "Website")
+    #expect(response.running?.serviceDisplayName == "Development")
     #expect(response.running?.timeUntil == nil)
     #expect(response.currentTime == "2026-08-23T10:30:00Z")
+}
+
+@Test
+func runningEntryUsesReadableFallbacks() throws {
+    let data = Data("{\"id\": 123}".utf8)
+    let entry = try JSONDecoder().decode(ClockodoEntry.self, from: data)
+
+    #expect(entry.customerDisplayName == "Unknown customer")
+    #expect(entry.projectDisplayName == "No project")
+    #expect(entry.serviceDisplayName == nil)
 }
 
 @Test

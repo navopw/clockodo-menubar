@@ -88,6 +88,18 @@ struct MenuContentView: View {
                 .font(.system(size: 34, weight: .semibold, design: .rounded))
                 .monospacedDigit()
 
+            if model.runningEntry != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    contextRow("Customer", value: model.runningCustomerName, systemImage: "person.2")
+                    contextRow("Project", value: model.runningProjectName, systemImage: "folder")
+                    if let service = model.runningServiceName {
+                        contextRow("Service", value: service, systemImage: "wrench.and.screwdriver")
+                    }
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+            }
+
             if let note = model.runningEntry?.text, !note.isEmpty {
                 Text(note)
                     .font(.caption)
@@ -104,6 +116,24 @@ struct MenuContentView: View {
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .disabled(model.isPerformingAction)
+        }
+    }
+
+    private func contextRow(_ label: String, value: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
         }
     }
 

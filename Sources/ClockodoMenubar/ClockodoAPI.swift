@@ -45,6 +45,18 @@ struct ClockodoEntry: Codable, Identifiable, Sendable {
             .compactMap { $0 }
             .joined(separator: " / ")
     }
+
+    var customerDisplayName: String {
+        customersName ?? "Unknown customer"
+    }
+
+    var projectDisplayName: String {
+        projectsName ?? "No project"
+    }
+
+    var serviceDisplayName: String? {
+        servicesName
+    }
 }
 
 struct ClockResponse: Codable, Sendable {

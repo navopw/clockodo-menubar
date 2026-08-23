@@ -47,8 +47,39 @@ final class AppModel: ObservableObject {
     }
 
     var runningTargetTitle: String {
-        guard let runningEntry else { return "Running" }
-        return runningEntry.displayName.isEmpty ? "Running timer" : runningEntry.displayName
+        guard runningEntry != nil else { return "Running" }
+        let names = [runningCustomerName, runningProjectName]
+            .filter { $0 != "No project" && $0 != "Unknown customer" }
+        return names.isEmpty ? "Running timer" : names.joined(separator: " / ")
+    }
+
+    var runningCustomerName: String {
+        guard let entry = runningEntry else { return "Unknown customer" }
+        if let name = entry.customersName, !name.isEmpty {
+            return name
+        }
+        if let id = entry.customersID {
+            return customers.first(where: { $0.id == id })?.name ?? "Customer #\(id)"
+        }
+        return "Unknown customer"
+    }
+
+    var runningProjectName: String {
+        guard let entry = runningEntry else { return "No project" }
+        if let name = entry.projectsName, !name.isEmpty {
+            return name
+        }
+        guard let id = entry.projectsID else { return "No project" }
+        return projects.first(where: { $0.id == id })?.name ?? "Project #\(id)"
+    }
+
+    var runningServiceName: String? {
+        guard let entry = runningEntry else { return nil }
+        if let name = entry.servicesName, !name.isEmpty {
+            return name
+        }
+        guard let id = entry.servicesID else { return nil }
+        return services.first(where: { $0.id == id })?.name ?? "Service #\(id)"
     }
 
     func startBackgroundUpdates() {
