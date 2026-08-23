@@ -10,6 +10,9 @@ struct ClockodoMenubarApp: App {
                 .environmentObject(model)
         } label: {
             Label(model.menuBarTitle, systemImage: model.isRunning ? "stopwatch.fill" : "stopwatch")
+                .task {
+                    model.startBackgroundUpdates()
+                }
         }
         .menuBarExtraStyle(.window)
     }

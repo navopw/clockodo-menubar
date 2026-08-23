@@ -45,7 +45,7 @@ Every request includes `X-ClockodoApiUser`, `X-ClockodoApiKey`, and `X-Clockodo-
 
 ### Phase 3: Release Quality
 
-- Add mock transport tests for requests, response decoding, and error responses.
+- Add SwiftUI UI tests and broader state-transition coverage; transport, decoding, and error-response tests are covered by the MVP test suite.
 - Add an app icon and accessibility labels.
 - Add a release build signed with Developer ID and notarized by Apple.
 - Add update delivery, either Sparkle or a manually documented release process.

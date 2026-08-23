@@ -55,5 +55,5 @@ The app is intentionally packaged as an `LSUIElement`, so it appears in the menu
 1. Add launch-at-login using Apple's `SMAppService`.
 2. Add today's total and recent entries using `/v2/entries`.
 3. Add a first-run connection test and clearer handling for expired/invalid API keys.
-4. Add UI tests with a mock Clockodo transport.
+4. Add SwiftUI UI tests and broader state-transition coverage.
 5. Add app icon, release packaging, signing, and notarization.

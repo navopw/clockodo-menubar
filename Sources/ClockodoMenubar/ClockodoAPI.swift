@@ -9,6 +9,20 @@ struct ClockodoCredentials: Sendable, Equatable {
     }
 }
 
+protocol ClockodoAPIClient: Sendable {
+    func getClock() async throws -> ClockResponse
+    func getCustomers() async throws -> [Customer]
+    func getProjects() async throws -> [Project]
+    func getServices() async throws -> [Service]
+    func startClock(
+        customerID: Int,
+        serviceID: Int,
+        projectID: Int?,
+        text: String?
+    ) async throws -> ClockResponse
+    func stopClock(entryID: Int) async throws -> ClockResponse
+}
+
 struct ClockodoEntry: Codable, Identifiable, Sendable {
     let id: Int
     let customersID: Int?
@@ -120,25 +134,29 @@ enum ClockodoAPIError: LocalizedError {
     case invalidURL
     case invalidResponse
     case httpStatus(Int, String)
+    case encoding(Error)
+    case decoding(Error)
     case transport(Error)
 
     var errorDescription: String? {
         switch self {
         case .invalidExternalApplication:
-            return "The Clockodo application identifier is too long. Use an email address with 33 characters or fewer."
+            return "The Clockodo application identifier is too long. Use a shorter email address."
         case .invalidURL:
             return "Clockodo returned an invalid API URL."
         case .invalidResponse:
             return "Clockodo returned an unreadable response."
         case let .httpStatus(status, message):
             return "Clockodo returned HTTP \(status): \(message)"
+        case let .encoding(error), let .decoding(error):
+            return "Clockodo returned data the app could not process: \(error.localizedDescription)"
         case let .transport(error):
             return error.localizedDescription
         }
     }
 }
 
-final class ClockodoClient: @unchecked Sendable {
+final class ClockodoClient: ClockodoAPIClient, Sendable {
     private let credentials: ClockodoCredentials
     private let session: URLSession
     private let baseURL = URL(string: "https://my.clockodo.com/api")!
@@ -186,7 +204,7 @@ final class ClockodoClient: @unchecked Sendable {
             customersID: customerID,
             servicesID: serviceID,
             projectsID: projectID,
-            text: text?.isEmpty == true ? nil : text
+            text: text?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         )
         return try await send(path: "/v2/clock", method: "POST", body: request)
     }
@@ -219,6 +237,8 @@ final class ClockodoClient: @unchecked Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(credentials.email, forHTTPHeaderField: "X-ClockodoApiUser")
         request.setValue(credentials.apiKey, forHTTPHeaderField: "X-ClockodoApiKey")
@@ -229,7 +249,7 @@ final class ClockodoClient: @unchecked Sendable {
             do {
                 request.httpBody = try JSONEncoder().encode(AnyEncodable(body))
             } catch {
-                throw ClockodoAPIError.transport(error)
+                throw ClockodoAPIError.encoding(error)
             }
         }
 
@@ -255,7 +275,7 @@ final class ClockodoClient: @unchecked Sendable {
         do {
             return try JSONDecoder().decode(Response.self, from: data)
         } catch {
-            throw ClockodoAPIError.transport(error)
+            throw ClockodoAPIError.decoding(error)
         }
     }
 
@@ -268,9 +288,7 @@ final class ClockodoClient: @unchecked Sendable {
             let errors: [Detail]?
         }
 
-        guard let response = try? JSONDecoder().decode(ErrorResponse.self, from: data) else {
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+        guard let response = try? JSONDecoder().decode(ErrorResponse.self, from: data) else { return nil }
         return response.errors?.compactMap(\.message).joined(separator: "; ")
     }
 }
@@ -288,9 +306,11 @@ private struct AnyEncodable: Encodable {
 }
 
 enum ClockodoDate {
+    private static let formatStyle = Date.ISO8601FormatStyle()
+
     static func date(from value: String?) -> Date? {
         guard let value else { return nil }
-        return ISO8601DateFormatter().date(from: value)
+        return try? formatStyle.parse(value)
     }
 }
 
@@ -303,4 +323,10 @@ func elapsedText(since value: String?, now: Date = Date()) -> String {
     return hours > 0
         ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
         : String(format: "%02d:%02d", minutes, seconds)
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
 }

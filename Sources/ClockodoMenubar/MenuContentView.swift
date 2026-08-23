@@ -26,9 +26,6 @@ struct MenuContentView: View {
         }
         .padding(16)
         .frame(width: 340)
-        .task {
-            model.startBackgroundUpdates()
-        }
     }
 
     private var header: some View {
@@ -178,11 +175,20 @@ struct MenuContentView: View {
                 .disabled(model.selectedCustomerID == nil || model.selectedServiceID == nil || model.isPerformingAction)
             }
         }
+        .onChange(of: model.selectedCustomerID) { _ in
+            model.customerSelectionChanged()
+        }
+        .onChange(of: model.selectedProjectID) { _ in
+            model.persistSelections()
+        }
+        .onChange(of: model.selectedServiceID) { _ in
+            model.persistSelections()
+        }
     }
 
     private var filteredProjects: [Project] {
         guard let customerID = model.selectedCustomerID else { return [] }
-        return model.projects.filter { $0.customersID == nil || $0.customersID == customerID }
+        return model.projects.filter { $0.customersID == customerID }
     }
 }
 

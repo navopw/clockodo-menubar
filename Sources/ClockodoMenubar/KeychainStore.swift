@@ -12,7 +12,13 @@ enum KeychainError: LocalizedError {
     }
 }
 
-struct KeychainStore {
+protocol CredentialStore: Sendable {
+    func read(account: String) throws -> String?
+    func save(_ value: String, account: String) throws
+    func delete(account: String) throws
+}
+
+struct KeychainStore: CredentialStore {
     private let service = "com.clockodo.menubar.credentials"
 
     func read(account: String) throws -> String? {
@@ -41,7 +47,7 @@ struct KeychainStore {
         ]
         let attributes: [String: Any] = [
             kSecValueData as String: Data(value.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)

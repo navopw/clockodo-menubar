@@ -18,15 +18,31 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var now = Date()
 
-    private let keychain = KeychainStore()
-    private var client: ClockodoClient?
+    private let keychain: any CredentialStore
+    private let clientFactory: @Sendable (ClockodoCredentials) -> any ClockodoAPIClient
+    private let userDefaults: UserDefaults
+    private var client: (any ClockodoAPIClient)?
     private var backgroundTask: Task<Void, Never>?
+    private var isBootstrapping = false
+    private var bootstrapRequested = false
+    private var credentialsGeneration = 0
+    private var stateVersion = 0
+    private var clockOffset: TimeInterval = 0
 
-    init() {
+    init(
+        keychain: any CredentialStore = KeychainStore(),
+        clientFactory: @escaping @Sendable (ClockodoCredentials) -> any ClockodoAPIClient = {
+            ClockodoClient(credentials: $0)
+        },
+        userDefaults: UserDefaults = .standard
+    ) {
+        self.keychain = keychain
+        self.clientFactory = clientFactory
+        self.userDefaults = userDefaults
         loadStoredCredentials()
-        selectedCustomerID = UserDefaults.standard.object(forKey: "selectedCustomerID") as? Int
-        selectedProjectID = UserDefaults.standard.object(forKey: "selectedProjectID") as? Int
-        selectedServiceID = UserDefaults.standard.object(forKey: "selectedServiceID") as? Int
+        selectedCustomerID = userDefaults.object(forKey: "selectedCustomerID") as? Int
+        selectedProjectID = userDefaults.object(forKey: "selectedProjectID") as? Int
+        selectedServiceID = userDefaults.object(forKey: "selectedServiceID") as? Int
     }
 
     deinit {
@@ -88,11 +104,13 @@ final class AppModel: ObservableObject {
         backgroundTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await bootstrap()
-            var lastClockRefresh = Date.distantPast
+            var lastClockRefresh = Date()
 
             while !Task.isCancelled {
-                now = Date()
-                if Date().timeIntervalSince(lastClockRefresh) >= 60 {
+                if isRunning {
+                    now = Date().addingTimeInterval(clockOffset)
+                }
+                if !isPerformingAction && Date().timeIntervalSince(lastClockRefresh) >= 60 {
                     await refreshClock()
                     lastClockRefresh = Date()
                 }
@@ -102,76 +120,153 @@ final class AppModel: ObservableObject {
     }
 
     func refreshClock() async {
-        guard let client else { return }
+        guard !isPerformingAction, let client else { return }
+        let generation = credentialsGeneration
+        let requestVersion = stateVersion
+
         do {
-            runningEntry = try await client.getClock().running
+            let response = try await client.getClock()
+            guard generation == credentialsGeneration,
+                  requestVersion == stateVersion,
+                  !isPerformingAction else { return }
+            applyClockResponse(response)
             lastUpdated = Date()
             errorMessage = nil
         } catch {
+            guard generation == credentialsGeneration,
+                  requestVersion == stateVersion,
+                  !isPerformingAction else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     func bootstrap() async {
         guard let client else { return }
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            async let clockResponse = client.getClock()
-            async let customerResponse = customers.isEmpty ? client.getCustomers() : customers
-            async let projectResponse = projects.isEmpty ? client.getProjects() : projects
-            async let serviceResponse = services.isEmpty ? client.getServices() : services
-
-            runningEntry = try await clockResponse.running
-            customers = try await customerResponse
-            projects = try await projectResponse
-            services = try await serviceResponse
-            lastUpdated = Date()
-            errorMessage = nil
-            selectFirstAvailableValuesIfNeeded()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func startClock() async {
-        guard let client, let selectedCustomerID, let selectedServiceID else {
-            errorMessage = "Choose a customer and service before starting the timer."
+        guard !isBootstrapping else {
+            bootstrapRequested = true
             return
         }
 
+        isLoading = true
+        isBootstrapping = true
+        let generation = credentialsGeneration
+
+        async let clockResponse: ClockResponse? = try? client.getClock()
+        async let customerResponse: [Customer]? = customers.isEmpty ? try? client.getCustomers() : customers
+        async let projectResponse: [Project]? = projects.isEmpty ? try? client.getProjects() : projects
+        async let serviceResponse: [Service]? = services.isEmpty ? try? client.getServices() : services
+
+        let loadedClock = await clockResponse
+        let loadedCustomers = await customerResponse
+        let loadedProjects = await projectResponse
+        let loadedServices = await serviceResponse
+
+        if generation == credentialsGeneration {
+            if let loadedClock {
+                applyClockResponse(loadedClock)
+            }
+            if let loadedCustomers {
+                customers = loadedCustomers
+            }
+            if let loadedProjects {
+                projects = loadedProjects
+            }
+            if let loadedServices {
+                services = loadedServices
+            }
+
+            if loadedClock != nil || loadedCustomers != nil || loadedProjects != nil || loadedServices != nil {
+                lastUpdated = Date()
+            }
+
+            if loadedClock != nil && loadedCustomers != nil && loadedProjects != nil && loadedServices != nil {
+                errorMessage = nil
+            } else {
+                errorMessage = "Clockodo data could not be fully loaded. Use Refresh to try again."
+            }
+            if loadedCustomers != nil && loadedProjects != nil && loadedServices != nil {
+                selectFirstAvailableValuesIfNeeded()
+            }
+        }
+
+        isBootstrapping = false
+        isLoading = false
+
+        if bootstrapRequested {
+            bootstrapRequested = false
+            await bootstrap()
+        }
+    }
+
+    private func applyClockResponse(_ response: ClockResponse) {
+        runningEntry = response.running
+        if let serverNow = ClockodoDate.date(from: response.currentTime) {
+            clockOffset = serverNow.timeIntervalSince(Date())
+        } else {
+            clockOffset = 0
+        }
+        now = Date().addingTimeInterval(clockOffset)
+    }
+
+    func startClock() async {
+        guard let client else {
+            errorMessage = "Connect to Clockodo before starting the timer."
+            return
+        }
+        guard let selectedCustomerID, let selectedServiceID else {
+            errorMessage = "Choose a customer and service before starting the timer."
+            return
+        }
+        guard !isPerformingAction else { return }
+
+        let projectID = validProjectID
+        if projectID != selectedProjectID {
+            selectedProjectID = projectID
+            persistSelections()
+        }
+
         isPerformingAction = true
+        stateVersion += 1
+        let generation = credentialsGeneration
+        let actionVersion = stateVersion
         defer { isPerformingAction = false }
 
         do {
             let response = try await client.startClock(
                 customerID: selectedCustomerID,
                 serviceID: selectedServiceID,
-                projectID: selectedProjectID,
+                projectID: projectID,
                 text: note
             )
-            runningEntry = response.running
+            guard generation == credentialsGeneration, actionVersion == stateVersion else { return }
+            applyClockResponse(response)
             note = ""
-            errorMessage = nil
             lastUpdated = Date()
+            errorMessage = nil
         } catch {
+            guard generation == credentialsGeneration, actionVersion == stateVersion else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     func stopClock() async {
         guard let client, let entryID = runningEntry?.id else { return }
+        guard !isPerformingAction else { return }
 
         isPerformingAction = true
+        stateVersion += 1
+        let generation = credentialsGeneration
+        let actionVersion = stateVersion
         defer { isPerformingAction = false }
 
         do {
             let response = try await client.stopClock(entryID: entryID)
-            runningEntry = response.running
+            guard generation == credentialsGeneration, actionVersion == stateVersion else { return }
+            applyClockResponse(response)
             errorMessage = nil
             lastUpdated = Date()
         } catch {
+            guard generation == credentialsGeneration, actionVersion == stateVersion else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -188,12 +283,17 @@ final class AppModel: ObservableObject {
         do {
             try keychain.save(email, account: "email")
             try keychain.save(apiKey, account: "apiKey")
-            credentials = ClockodoCredentials(email: email, apiKey: apiKey)
-            client = ClockodoClient(credentials: credentials!)
+            let newCredentials = ClockodoCredentials(email: email, apiKey: apiKey)
+            credentials = newCredentials
+            client = clientFactory(newCredentials)
+            credentialsGeneration += 1
+            stateVersion += 1
             runningEntry = nil
             customers = []
             projects = []
             services = []
+            clockOffset = 0
+            now = Date()
             errorMessage = nil
             await bootstrap()
         } catch {
@@ -205,12 +305,18 @@ final class AppModel: ObservableObject {
         do {
             try keychain.delete(account: "email")
             try keychain.delete(account: "apiKey")
+            credentialsGeneration += 1
+            stateVersion += 1
+            backgroundTask?.cancel()
+            backgroundTask = nil
             credentials = nil
             client = nil
             runningEntry = nil
             customers = []
             projects = []
             services = []
+            clockOffset = 0
+            now = Date()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -218,17 +324,23 @@ final class AppModel: ObservableObject {
     }
 
     func persistSelections() {
-        UserDefaults.standard.set(selectedCustomerID, forKey: "selectedCustomerID")
-        UserDefaults.standard.set(selectedProjectID, forKey: "selectedProjectID")
-        UserDefaults.standard.set(selectedServiceID, forKey: "selectedServiceID")
+        userDefaults.set(selectedCustomerID, forKey: "selectedCustomerID")
+        userDefaults.set(selectedProjectID, forKey: "selectedProjectID")
+        userDefaults.set(selectedServiceID, forKey: "selectedServiceID")
+    }
+
+    func customerSelectionChanged() {
+        selectedProjectID = validProjectID
+        persistSelections()
     }
 
     private func loadStoredCredentials() {
         do {
             guard let email = try keychain.read(account: "email"),
                   let apiKey = try keychain.read(account: "apiKey") else { return }
-            credentials = ClockodoCredentials(email: email, apiKey: apiKey)
-            client = ClockodoClient(credentials: credentials!)
+            let storedCredentials = ClockodoCredentials(email: email, apiKey: apiKey)
+            credentials = storedCredentials
+            client = clientFactory(storedCredentials)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -241,11 +353,14 @@ final class AppModel: ObservableObject {
         if selectedServiceID == nil || !services.contains(where: { $0.id == selectedServiceID }) {
             selectedServiceID = services.first?.id
         }
-        if let selectedCustomerID,
-           let selectedProjectID,
-           projects.contains(where: { $0.id == selectedProjectID && $0.customersID == selectedCustomerID }) == false {
-            self.selectedProjectID = nil
-        }
+        selectedProjectID = validProjectID
         persistSelections()
+    }
+
+    private var validProjectID: Int? {
+        guard let selectedCustomerID, let selectedProjectID else { return nil }
+        return projects.contains {
+            $0.id == selectedProjectID && $0.customersID == selectedCustomerID
+        } ? selectedProjectID : nil
     }
 }

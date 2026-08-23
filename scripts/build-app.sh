@@ -11,5 +11,5 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BIN_DIR/ClockodoMenubar" "$APP_DIR/Contents/MacOS/ClockodoMenubar"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 
-codesign --force --deep --sign - "$APP_DIR"
+codesign --force --sign - "$APP_DIR"
 print "Built $APP_DIR"
