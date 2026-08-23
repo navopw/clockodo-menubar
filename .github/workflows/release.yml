@@ -42,6 +42,11 @@ jobs:
             exit 1
           fi
 
+      - name: Select Xcode 16.4
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+
       - name: Calculate version
         id: version
         env:
