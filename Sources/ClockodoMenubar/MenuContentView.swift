@@ -1,225 +1,284 @@
 import AppKit
 import SwiftUI
 
+private enum Layout {
+    static let panelWidth: CGFloat = 320
+    static let horizontalInset: CGFloat = 14
+    static let rowSpacing: CGFloat = 6
+    static let labelColumnWidth: CGFloat = 58
+    static let labelColumnSpacing: CGFloat = 10
+    static var controlColumnWidth: CGFloat {
+        panelWidth - 2 * horizontalInset - labelColumnWidth - labelColumnSpacing
+    }
+}
+
+private let timeOfDayFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .none
+    formatter.timeStyle = .short
+    return formatter
+}()
+
 struct MenuContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var showingSettings = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 0) {
             header
 
-            if !model.isConfigured {
-                CredentialsView(title: "Connect Clockodo")
-            } else if showingSettings {
-                CredentialsView(title: "Clockodo settings", allowForget: true)
-            } else {
-                timerContent
-            }
+            Divider()
+
+            content
+                .padding(.horizontal, Layout.horizontalInset)
+                .padding(.vertical, 12)
 
             if let errorMessage = model.errorMessage {
-                Text(errorMessage)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(16)
-        .frame(width: 340)
-    }
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Clockodo")
-                    .font(.headline)
-                Text(model.isRunning ? model.runningTargetTitle : "Time tracker")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if model.isConfigured {
-                Button {
-                    showingSettings.toggle()
-                } label: {
-                    Image(systemName: showingSettings ? "xmark" : "gearshape")
-                }
-                .buttonStyle(.plain)
-                .help(showingSettings ? "Close settings" : "Settings")
-            }
-        }
-    }
-
-    private var timerContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            connectionStatus
-
-            todaySummary
-
-            if model.isRunning {
-                runningTimer
-            } else {
-                startTimerForm
+                Divider()
+                errorBanner(errorMessage)
             }
 
             Divider()
 
-            HStack {
-                Button {
-                    Task { await model.retryConnection() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(model.isLoading || model.isPerformingAction || model.isConnecting)
-
-                Spacer()
-
-                Button("Quit") {
-                    NSApp.terminate(nil)
-                }
-                .buttonStyle(.borderless)
-            }
+            footer
         }
+        .frame(width: Layout.panelWidth)
     }
 
-    private var connectionStatus: some View {
-        HStack(spacing: 8) {
-            Image(systemName: model.connectionState.systemImage)
-                .foregroundStyle(model.connectionState.isHealthy ? .green : .secondary)
-            Text(model.connectionState.title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    // MARK: - Header
 
-            Spacer()
+    private var header: some View {
+        HStack(spacing: 9) {
+            Image(systemName: model.isRunning ? "stopwatch.fill" : "stopwatch")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(model.isRunning ? Color.green : Color.secondary)
+                .frame(width: 18)
 
-            if !model.connectionState.isHealthy && model.connectionState != .connecting {
-                Button("Retry") {
-                    Task { await model.retryConnection() }
-                }
-                .buttonStyle(.borderless)
-                .disabled(model.isLoading || model.isConnecting || model.isPerformingAction)
-            }
-        }
-    }
-
-    private var todaySummary: some View {
-        HStack {
-            Label("Today", systemImage: "calendar")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(model.todayTotalText)
-                .font(.callout.weight(.medium))
-                .monospacedDigit()
-        }
-    }
-
-    private var runningTimer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(elapsedText(since: model.runningEntry?.timeSince, now: model.now))
-                .font(.system(size: 34, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-
-            if model.runningEntry != nil {
-                VStack(alignment: .leading, spacing: 8) {
-                    contextRow("Customer", value: model.runningCustomerName, systemImage: "person.2")
-                    contextRow("Project", value: model.runningProjectName, systemImage: "folder")
-                    if let service = model.runningServiceName {
-                        contextRow("Service", value: service, systemImage: "wrench.and.screwdriver")
-                    }
-                }
-                .padding(10)
-                .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
-            }
-
-            if let note = model.runningEntry?.text, !note.isEmpty {
-                Text(note)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Clockodo")
+                    .font(.headline)
+                Text(headerSubtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
+
+            Spacer(minLength: 8)
+
+            if model.isConfigured {
+                Button {
+                    showingSettings.toggle()
+                } label: {
+                    Image(systemName: showingSettings ? "xmark.circle.fill" : "gearshape")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(showingSettings ? "Close settings" : "Settings")
+                .accessibilityLabel(showingSettings ? "Close settings" : "Settings")
+            }
+        }
+        .padding(.horizontal, Layout.horizontalInset)
+        .padding(.vertical, 10)
+    }
+
+    private var headerSubtitle: String {
+        if !model.isConfigured {
+            return "Not connected"
+        }
+        if showingSettings {
+            return model.credentials?.email ?? "Settings"
+        }
+        return model.isRunning ? model.runningTargetTitle : "No timer running"
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        if !model.isConfigured {
+            CredentialsView(title: "Connect Clockodo")
+        } else if showingSettings {
+            CredentialsView(title: "Clockodo settings", allowForget: true)
+        } else if model.isRunning {
+            runningContent
+        } else {
+            idleContent
+        }
+    }
+
+    // MARK: - Running
+
+    private var runningContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 5) {
+                        StatusDot(color: .green, pulsing: true)
+                        captionLabel("Running")
+                    }
+                    Text(elapsedText(since: model.runningEntry?.timeSince, now: model.now))
+                        .font(.system(size: 32, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    captionLabel("Today")
+                    Text(model.todayTotalText)
+                        .font(.system(size: 17, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            detailCard
 
             Button {
                 Task { await model.stopClock() }
             } label: {
-                Label(model.isPerformingAction ? "Stopping..." : "Stop timer", systemImage: "stop.fill")
+                Label(model.isPerformingAction ? "Stopping…" : "Stop timer", systemImage: "stop.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .tint(.red)
             .disabled(model.isPerformingAction)
         }
     }
 
-    private func contextRow(_ label: String, value: String, systemImage: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+    private var detailCard: some View {
+        VStack(alignment: .leading, spacing: Layout.rowSpacing) {
+            detailRow("Customer", value: model.runningCustomerName, systemImage: "person.2")
+            detailRow("Project", value: model.runningProjectName, systemImage: "folder")
+            if let service = model.runningServiceName {
+                detailRow("Service", value: service, systemImage: "wrench.and.screwdriver")
+            }
+            if let note = model.runningEntry?.text, !note.isEmpty {
+                detailRow("Note", value: note, systemImage: "text.alignleft")
+            }
+            if let start = ClockodoDate.date(from: model.runningEntry?.timeSince) {
+                detailRow("Started", value: timeOfDayFormatter.string(from: start), systemImage: "clock")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
+    private func detailRow(_ label: String, value: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .center)
+
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: Layout.labelColumnWidth, alignment: .leading)
+
+            Text(value)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(value)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Idle
+
+    private var idleContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    captionLabel("Today")
+                    Text(model.todayTotalText)
+                        .font(.system(size: 32, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+
+                Spacer(minLength: 8)
+
+                if let updated = model.todayTotalUpdated {
+                    Text("Updated \(timeOfDayFormatter.string(from: updated))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if model.isLoading && model.customers.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading Clockodo data…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 14)
+            } else {
+                startTimerForm
             }
         }
     }
 
     private var startTimerForm: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if model.isLoading && model.customers.isEmpty {
-                ProgressView("Loading Clockodo data...")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Picker("Customer", selection: $model.selectedCustomerID) {
-                    Text("Choose customer").tag(nil as Int?)
-                    ForEach(model.customers) { customer in
-                        Text(customer.name).tag(Optional(customer.id))
-                    }
-                }
-
-                Picker("Project", selection: $model.selectedProjectID) {
-                    Text("No project").tag(nil as Int?)
-                    ForEach(filteredProjects) { project in
-                        Text(project.name).tag(Optional(project.id))
-                    }
-                }
-
-                Picker("Service", selection: $model.selectedServiceID) {
-                    Text("Choose service").tag(nil as Int?)
-                    ForEach(model.services) { service in
-                        Text(service.name).tag(Optional(service.id))
-                    }
-                }
-
-                TextField("Note (optional)", text: $model.note)
-                    .textFieldStyle(.roundedBorder)
-
-                Button {
-                    Task {
-                        if model.canStartLastConfiguration {
-                            await model.startLastConfiguration()
-                        } else {
-                            await model.startClock()
+            VStack(alignment: .leading, spacing: 8) {
+                fieldRow("Customer") {
+                    Picker("Customer", selection: $model.selectedCustomerID) {
+                        Text("Choose customer").tag(nil as Int?)
+                        ForEach(model.customers) { customer in
+                            Text(customer.name).tag(Optional(customer.id))
                         }
                     }
-                } label: {
-                    Label(
-                        model.isPerformingAction
-                            ? "Starting..."
-                            : (model.canStartLastConfiguration ? "Start last setup" : "Start timer"),
-                        systemImage: "play.fill"
-                    )
-                        .frame(maxWidth: .infinity)
+                    .labelsHidden()
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!model.canStartLastConfiguration || model.isPerformingAction)
+
+                fieldRow("Project") {
+                    Picker("Project", selection: $model.selectedProjectID) {
+                        Text("No project").tag(nil as Int?)
+                        ForEach(filteredProjects) { project in
+                            Text(project.name).tag(Optional(project.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .disabled(filteredProjects.isEmpty)
+                }
+
+                fieldRow("Service") {
+                    Picker("Service", selection: $model.selectedServiceID) {
+                        Text("Choose service").tag(nil as Int?)
+                        ForEach(model.services) { service in
+                            Text(service.name).tag(Optional(service.id))
+                        }
+                    }
+                    .labelsHidden()
+                }
+
+                fieldRow("Note") {
+                    TextField("Optional", text: $model.note)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
+
+            Button {
+                Task { await model.startLastConfiguration() }
+            } label: {
+                Label(model.isPerformingAction ? "Starting…" : "Start timer", systemImage: "play.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!model.canStartLastConfiguration || model.isPerformingAction)
         }
         .onChange(of: model.selectedCustomerID) { _ in
             model.customerSelectionChanged()
@@ -232,9 +291,131 @@ struct MenuContentView: View {
         }
     }
 
+    private func fieldRow(_ label: String, @ViewBuilder control: () -> some View) -> some View {
+        HStack(spacing: Layout.labelColumnSpacing) {
+            Text(label)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: Layout.labelColumnWidth, alignment: .trailing)
+
+            control()
+                .frame(width: Layout.controlColumnWidth, alignment: .leading)
+        }
+    }
+
     private var filteredProjects: [Project] {
         guard let customerID = model.selectedCustomerID else { return [] }
         return model.projects.filter { $0.customersID == customerID }
+    }
+
+    // MARK: - Error banner
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 7) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+
+            Text(message)
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, Layout.horizontalInset)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.10))
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if model.isConfigured {
+                HStack(spacing: 5) {
+                    StatusDot(
+                        color: model.connectionState.isHealthy ? .green : .secondary,
+                        pulsing: model.connectionState == .connecting
+                    )
+                    Text(model.connectionState.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .help(lastUpdateText)
+            }
+
+            Spacer(minLength: 0)
+
+            if model.isConfigured {
+                Button {
+                    Task { await model.retryConnection() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Refresh")
+                .accessibilityLabel("Refresh")
+                .disabled(model.isLoading || model.isPerformingAction || model.isConnecting)
+            }
+
+            Button("Quit") {
+                NSApp.terminate(nil)
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .keyboardShortcut("q", modifiers: .command)
+            .help("Quit Clockodo")
+        }
+        .padding(.horizontal, Layout.horizontalInset)
+        .padding(.vertical, 7)
+    }
+
+    // MARK: - Shared pieces
+
+    private var lastUpdateText: String {
+        guard let lastUpdated = model.lastUpdated else { return "Not updated yet" }
+        return "Last update \(timeOfDayFormatter.string(from: lastUpdated))"
+    }
+
+    private func captionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    private func formLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+    }
+}
+
+private struct StatusDot: View {
+    let color: Color
+    var pulsing = false
+
+    @State private var isAnimating = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .opacity(pulsing && isAnimating ? 0.45 : 1)
+            .animation(
+                pulsing ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default,
+                value: isAnimating
+            )
+            .onAppear {
+                if pulsing {
+                    isAnimating = true
+                }
+            }
     }
 }
 
@@ -253,49 +434,63 @@ struct CredentialsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-
-            if !allowForget {
-                Text("Your API key is stored only in the macOS Keychain.")
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text("Create an API key in Clockodo under Personal settings. It is stored only in the macOS Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            TextField("Clockodo email", text: $email)
-                .textFieldStyle(.roundedBorder)
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Clockodo email", text: $email)
+                    .textFieldStyle(.roundedBorder)
 
-            SecureField(allowForget ? "New API key" : "API key", text: $apiKey)
-                .textFieldStyle(.roundedBorder)
+                SecureField(allowForget ? "New API key" : "API key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
 
-            Button {
-                Task { await model.saveCredentials(email: email, apiKey: apiKey) }
-            } label: {
-                Text(model.isConnecting ? "Checking connection..." : "Save and connect")
-                    .frame(maxWidth: .infinity)
+                Button {
+                    Task { await model.saveCredentials(email: email, apiKey: apiKey) }
+                } label: {
+                    Text(model.isConnecting ? "Checking connection…" : "Save and connect")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(
+                    email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || apiKey.isEmpty
+                        || model.isConnecting
+                )
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(
-                email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || apiKey.isEmpty
-                    || model.isConnecting
-            )
 
             if allowForget {
-                Toggle(
-                    "Start at login",
-                    isOn: Binding(
+                Divider()
+
+                HStack(spacing: 8) {
+                    Text("Start at login")
+                        .font(.callout)
+
+                    Spacer(minLength: 8)
+
+                    Toggle("Start at login", isOn: Binding(
                         get: { model.launchAtLoginEnabled },
                         set: { model.setLaunchAtLogin($0) }
-                    )
-                )
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
 
                 Button("Forget credentials") {
                     model.forgetCredentials()
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .font(.callout)
                 .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .onAppear {

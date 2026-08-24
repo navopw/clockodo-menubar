@@ -15,11 +15,27 @@ struct ClockodoMenubarApp: App {
             MenuContentView()
                 .environmentObject(model)
         } label: {
-            Label(model.menuBarTitle, systemImage: model.isRunning ? "stopwatch.fill" : "stopwatch")
+            menuBarLabel
                 .task {
                     model.startBackgroundUpdates()
                 }
         }
         .menuBarExtraStyle(.window)
+    }
+
+    @ViewBuilder
+    private var menuBarLabel: some View {
+        if model.isRunning {
+            Label {
+                Text(model.menuBarTitle)
+                    .monospacedDigit()
+            } icon: {
+                Image(systemName: "stopwatch.fill")
+            }
+            .accessibilityLabel("Clockodo timer running, \(model.menuBarTitle)")
+        } else {
+            Image(systemName: "stopwatch")
+                .accessibilityLabel("Clockodo, no timer running")
+        }
     }
 }
