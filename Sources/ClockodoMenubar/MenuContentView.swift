@@ -146,7 +146,7 @@ struct MenuContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .tint(.red)
+            .tint(.stopRed)
             .disabled(model.isPerformingAction)
         }
     }
@@ -394,6 +394,18 @@ struct MenuContentView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
     }
+}
+
+private extension Color {
+    /// A saturated, unmistakably red tint for the stop action, instead of the
+    /// slightly orange system red. Darkened in light mode and lifted in dark
+    /// mode so the white button label stays legible in both appearances.
+    static let stopRed = Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return isDark
+            ? NSColor(srgbRed: 1.0, green: 0.16, blue: 0.16, alpha: 1)
+            : NSColor(srgbRed: 0.84, green: 0.0, blue: 0.0, alpha: 1)
+    })
 }
 
 private struct StatusDot: View {
