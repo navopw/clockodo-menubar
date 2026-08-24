@@ -8,6 +8,8 @@
 Start and stop timers, choose a customer, project, and service, and see your
 running time without opening the Clockodo web app.
 
+<img width="380" height="361" alt="CleanShot 2026-08-24 at 02 13 34" src="https://github.com/user-attachments/assets/9a063cf0-5707-4c86-b53a-92941a345629" />
+
 ## Features
 
 - Store the Clockodo email and API key in the macOS Keychain.
