@@ -28,13 +28,14 @@ running time without opening the Clockodo web app.
 - Xcode 16 or newer, including a Swift 6 toolchain
 - A Clockodo account with an API key
 
-Prebuilt release archives currently target Apple Silicon. Intel Macs can run
-the source build, but a universal release is not available yet.
+Prebuilt release archives are universal binaries that run natively on Apple
+Silicon and Intel Macs.
 
 ## Installation
 
-When a release is published, download its ZIP from [GitHub Releases](https://github.com/navopw/clockodo-menubar/releases),
-unzip it, and open `Clockodo Menubar.app`. Until then, use [Build From Source](#build-from-source).
+Download the latest ZIP from [GitHub Releases](https://github.com/navopw/clockodo-menubar/releases),
+unzip it, and open `Clockodo Menubar.app`. Every release ships a `.sha256`
+checksum next to the archive. You can also [Build From Source](#build-from-source).
 
 Release archives are currently ad-hoc signed. macOS may require you to approve
 one in **System Settings > Privacy & Security**. Developer ID signing and
@@ -90,16 +91,16 @@ Read more in [PLAN.md](PLAN.md) and the [Clockodo API documentation](https://doc
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and contribution guidance.
 
-The release workflow is manually triggered from GitHub Actions on `main`. It
-increments the latest `vMAJOR.MINOR.PATCH` tag, runs the tests, builds the app,
-and publishes a ZIP archive. Automatic in-app updates are intentionally not
+Every push to `main` runs the `Latest` workflow, which tests, builds the
+universal app, and publishes a `v1.0.<run number>` GitHub release with the ZIP
+archive and its checksum. Automatic in-app updates are intentionally not
 included.
 
 ## Roadmap
 
 - Add recent entries and links to the matching Clockodo pages.
 - Add SwiftUI UI tests and broader state-transition coverage.
-- Add an app icon, universal builds, Developer ID signing, and notarization.
+- Add an app icon, Developer ID signing, and notarization.
 
 ## Disclaimer
 

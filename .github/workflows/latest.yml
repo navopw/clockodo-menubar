@@ -1,0 +1,69 @@
+name: Latest
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: latest-release
+  cancel-in-progress: false
+
+env:
+  VERSION: 1.0.${{ github.run_number }}
+
+jobs:
+  build-and-release:
+    runs-on: macos-26
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.6'
+
+      - name: Test
+        run: swift test
+
+      - name: Build universal app
+        env:
+          APP_VERSION: ${{ env.VERSION }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: ./scripts/build-app.sh
+
+      - name: Package
+        id: package
+        run: |
+          archive="Clockodo-Menubar-${VERSION}-macOS.zip"
+          checksum="${archive}.sha256"
+          ditto -c -k --sequesterRsrc --keepParent "dist/Clockodo Menubar.app" "$archive"
+          shasum -a 256 "$archive" > "$checksum"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+        run: |
+          tag="v${VERSION}"
+          title="Latest (${tag})"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$ARCHIVE" "$CHECKSUM" --clobber
+            gh release edit "$tag" --title "$title" --latest
+          else
+            gh release create "$tag" "$ARCHIVE" "$CHECKSUM" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --generate-notes \
+              --latest
+          fi

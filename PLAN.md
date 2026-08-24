@@ -11,8 +11,8 @@ Provide a small, native macOS menubar utility that makes the Clockodo stop clock
 - **Networking:** Foundation `URLSession`, using the Clockodo REST API directly.
 - **Secrets:** macOS Keychain Services for the Clockodo email and API key.
 - **Local state:** `UserDefaults` for the last customer, project, and service selection only. No time-entry data or API keys are persisted there.
-- **Packaging:** A regular `.app` with `LSUIElement=true`; local packaging uses an ad-hoc signature.
-- **Releases:** A manually triggered GitHub Action creates versioned ZIP releases with automatic SemVer increments.
+- **Packaging:** A universal (arm64 and x86_64) `.app` with `LSUIElement=true`; packaging uses an ad-hoc signature.
+- **Releases:** Every push to `main` publishes a `v1.0.<run number>` GitHub release with a universal ZIP archive and its SHA-256 checksum.
 
 ## API Contract
 
