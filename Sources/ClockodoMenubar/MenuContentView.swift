@@ -117,7 +117,7 @@ struct MenuContentView: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
-                        StatusDot(color: .green, pulsing: true)
+                        StatusDot(color: .green)
                         captionLabel("Running")
                     }
                     Text(elapsedText(since: model.runningEntry?.timeSince, now: model.now))
@@ -333,10 +333,7 @@ struct MenuContentView: View {
         HStack(spacing: 8) {
             if model.isConfigured {
                 HStack(spacing: 5) {
-                    StatusDot(
-                        color: model.connectionState.isHealthy ? .green : .secondary,
-                        pulsing: model.connectionState == .connecting
-                    )
+                    StatusDot(color: model.connectionState.isHealthy ? .green : .secondary)
                     Text(model.connectionState.title)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -410,24 +407,11 @@ private extension Color {
 
 private struct StatusDot: View {
     let color: Color
-    var pulsing = false
-
-    @State private var isAnimating = false
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 7, height: 7)
-            .opacity(pulsing && isAnimating ? 0.45 : 1)
-            .animation(
-                pulsing ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default,
-                value: isAnimating
-            )
-            .onAppear {
-                if pulsing {
-                    isAnimating = true
-                }
-            }
     }
 }
 
